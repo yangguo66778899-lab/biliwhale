@@ -19,6 +19,7 @@ interface Node {
   textContent: string;
   innerHTML: string;
   value: string;
+  checked: boolean;
   children: Node[];
   listeners: Record<string, Array<(...args: unknown[]) => void>>;
   classList: { add: (name: string) => void; remove: (name: string) => void; toggle: (name: string, on: boolean) => void; contains: (name: string) => boolean };
@@ -41,6 +42,7 @@ function makeNode(tagName: string): Node {
     textContent: '',
     innerHTML: '',
     value: '',
+    checked: false,
     children: [],
     listeners: {},
     classList: {
@@ -128,7 +130,27 @@ async function loadPanel(hash = '#/account'): Promise<Harness> {
       warnings: [],
     },
     '/api/doctor': { ok: true, report: { healthy: true, dataDir: 'D:/d', rows: [] } },
-    '/api/config': { ok: true, config: {}, groups: [], defaults: {}, issues: [] },
+    '/api/config': {
+      ok: true,
+      config: { share: { enabled: false, minScore: 13 }, safety: { writeEnabled: true, dryRun: false } },
+      groups: [
+        {
+          key: 'share',
+          label: '分享',
+          fields: [
+            { path: 'share.enabled', relPath: 'enabled', label: '允许对外分享', widget: 'boolean', kind: 'boolean', default: false },
+            { path: 'share.minScore', relPath: 'minScore', label: '分享分数门槛', widget: 'number', kind: 'number', default: 13, min: 0, max: 20, int: true },
+          ],
+        },
+        {
+          key: 'safety',
+          label: '安全',
+          fields: [{ path: 'safety.dryRun', relPath: 'dryRun', label: '一律预演', widget: 'boolean', kind: 'boolean', default: false }],
+        },
+      ],
+      defaults: {},
+      issues: [],
+    },
     '/api/secrets': { ok: true, hasApiKey: false, fingerprint: '', source: 'none' },
     '/api/pending': {
       ok: true,
@@ -271,6 +293,35 @@ test('设置页：填 DeepSeek key 后点「保存并验证」会 PUT /api/secre
   assert.ok(call, `应该 PUT /api/secrets/llm，实际：${h.calls.map((item) => `${item.method} ${item.url}`).join(' / ')}`);
   assert.equal(call?.method, 'PUT');
   assert.deepEqual(call?.body, { apiKey: 'sk-test-0123456789abcdef' }, '要把输入框里的 key 发出去');
+});
+
+test('设置页：勾上「允许对外分享」再保存，PUT 的配置里 share.enabled 必须是 true', async () => {
+  const h = await loadPanel('#/settings');
+  assert.deepEqual(h.errors, []);
+  const panel = h.bySelector.get('#panel-settings');
+  assert.ok(panel);
+
+  // 找到那个开关（字段上带 data-field=绝对路径，正好也方便测试定位）
+  const checkbox = findAll(panel, (node) => node.tagName === 'INPUT' && (node as unknown as Record<string, unknown>)['data-field'] === 'share.enabled')[0];
+  assert.ok(checkbox, '找不到 share.enabled 的勾选框');
+
+  checkbox.checked = true;
+  for (const handler of checkbox.listeners.change ?? []) handler({});
+  assert.equal(checkbox.checked, true);
+
+  const save = buttons(panel).find((button) => textOf(button) === '保存');
+  assert.ok(save, `找不到保存按钮：${buttons(panel).map(textOf).join(' / ')}`);
+  save.click();
+  for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setImmediate(resolve));
+
+  const put = h.calls.find((call) => call.url === '/api/config' && call.method === 'PUT');
+  assert.ok(put, `应该 PUT /api/config，实际请求：${JSON.stringify(h.calls)}`);
+  // 面板是把整份配置直接 PUT 上去的（不带 {config} 包装）
+  const body = put.body as Record<string, unknown> | undefined;
+  const share = (body?.share ?? {}) as { enabled?: boolean };
+  assert.equal(share.enabled, true, `开关必须写进 share.enabled，实际：${JSON.stringify(body)}`);
+  // 别再写出顶层垃圾字段（这正是之前的 bug）
+  assert.equal(body?.enabled, undefined);
 });
 
 test('概览页：预演一轮 → dryRun=true，现在跑一轮 → dryRun=false', async () => {

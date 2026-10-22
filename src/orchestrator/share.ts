@@ -142,35 +142,20 @@ export async function executeShares(deps: ShareDeps, input: ShareInput): Promise
 
   for (const item of input.items) {
     const atName = cfg.account.name ?? '';
-    const composed = composeCommentText({
-      proposal: item.share,
-      atOwner: cfg.share.comment.atOwner,
-      atName,
-      maxChars: cfg.share.comment.maxChars,
-    });
-    const content = composed.text;
-    const contentHash = contentHashOf(content);
-    const target = composed.text.includes('@') ? composed.text.slice(0, composed.text.indexOf(' ')) : 'owner';
-    const key = idempotencyKey({ bvid: item.bvid, action: 'comment', target, contentHash });
+    const channel: 'comment' | 'none' = item.share?.channel === 'comment' ? 'comment' : 'none';
 
     const attempt: ShareAttempt = {
       bvid: item.bvid,
       aid: item.aid,
-      channel: (item.share?.channel ?? 'none') === 'comment' ? 'comment' : 'none',
+      channel,
       status: 'denied',
-      content,
-      contentHash,
-      key,
+      content: '',
+      contentHash: '',
+      key: '',
       deny: [],
-      notes: composed.notes,
+      notes: [],
     };
     attempts.push(attempt);
-
-    if (!composed.ok) {
-      attempt.deny.push(composed.reason ?? '文案不可用');
-      report.denied += 1;
-      continue;
-    }
 
     // M3 只有评论；私信/动态在 M4
     if (item.share?.channel === 'dm') {
@@ -179,18 +164,13 @@ export async function executeShares(deps: ShareDeps, input: ShareInput): Promise
       continue;
     }
 
-    if (deps.quota.hasSentContent(key)) {
-      attempt.deny.push('同样内容已经发过（幂等）');
-      report.denied += 1;
-      continue;
-    }
-
+    // 先过闸门、再看文案：这样「开关关着」才是报告里写的原因（而不是「模型没给文案」）
     const decision: GateDecision = gateShare({
       writeEnabled: cfg.safety.writeEnabled,
       killSwitch: cfg.safety.killSwitch,
       dryRun: input.dryRun,
       shareEnabled: cfg.share.enabled,
-      channel: attempt.channel,
+      channel,
       allowedChannels: cfg.share.enabled ? [cfg.share.via] : [],
       score: item.score,
       minScore: cfg.share.minScore,
@@ -210,6 +190,35 @@ export async function executeShares(deps: ShareDeps, input: ShareInput): Promise
       attempt.deny.push(...decision.deny);
       report.denied += 1;
       notes.push(`没发 ${item.bvid}：${decision.deny.join('；')}`);
+      continue;
+    }
+
+    // 闸门过了，才轮到「有没有东西可发」
+    const composed = composeCommentText({
+      proposal: item.share,
+      atOwner: cfg.share.comment.atOwner,
+      atName,
+      maxChars: cfg.share.comment.maxChars,
+    });
+    attempt.content = composed.text;
+    attempt.notes = composed.notes;
+    if (!composed.ok) {
+      attempt.deny.push(`${composed.reason ?? '文案不可用'}（分享开关是开着的，但模型没写这条的文案）`);
+      report.denied += 1;
+      notes.push(`没发 ${item.bvid}：模型没给分享文案`);
+      continue;
+    }
+
+    const content = composed.text;
+    const contentHash = contentHashOf(content);
+    const target = content.includes('@') ? content.slice(0, content.indexOf(' ')) : 'owner';
+    const key = idempotencyKey({ bvid: item.bvid, action: 'comment', target, contentHash });
+    attempt.contentHash = contentHash;
+    attempt.key = key;
+
+    if (deps.quota.hasSentContent(key)) {
+      attempt.deny.push('同样内容已经发过（幂等）');
+      report.denied += 1;
       continue;
     }
 

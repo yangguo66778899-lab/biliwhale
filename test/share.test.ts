@@ -212,8 +212,27 @@ test('幂等：同样内容成功发过 → 第二次拒绝，不再发请求', 
 
   const second = await executeShares(h.deps, { items: [ITEM], todayShares: 1, silenceCap: 3, dryRun: false });
   assert.equal(second.sent, 0);
-  assert.equal(h.transport.calls.length, callsAfterFirst, '幂等命中时不许再发请求');
-  assert.ok(second.attempts[0]?.deny.some((line) => line.includes('幂等') || line.includes('已经发过')), JSON.stringify(second.attempts[0]));
+  assert.equal(h.transport.calls.length, callsAfterFirst, '命中幂等或冷却时都不许再发请求');
+  // 同视频同内容时闸门会先报「同视频冷却中」；两种拒绝都合规，但必须有一条说清原因
+  assert.ok(
+    second.attempts[0]?.deny.some((line) => line.includes('幂等') || line.includes('已经发过') || line.includes('冷却')),
+    JSON.stringify(second.attempts[0]),
+  );
+});
+
+test('幂等键里带了 bvid：换视频的相同文案允许发（不会因为文案一样就拦）', async () => {
+  const h = harness();
+  await executeShares(h.deps, { items: [ITEM], todayShares: 0, silenceCap: 3, dryRun: false });
+  const callsAfterFirst = h.transport.calls.length;
+
+  const otherVideo = await executeShares(h.deps, {
+    items: [{ ...ITEM, bvid: 'BV1other', share: { channel: 'comment', text: '这条值得看' } }],
+    todayShares: 1,
+    silenceCap: 3,
+    dryRun: false,
+  });
+  assert.equal(otherVideo.sent, 1, '不同视频的相同文案应当允许（幂等键包含 bvid）');
+  assert.equal(h.transport.calls.length, callsAfterFirst + 1);
 });
 
 test('复核失败：标 unverified、不自动重发、账本也记 unverified', async () => {

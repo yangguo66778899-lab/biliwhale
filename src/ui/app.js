@@ -341,7 +341,11 @@ async function renderSettings() {
   for (const group of data.groups) {
     const card = el('div', { class: 'card' }, [el('h2', {}, [group.label]), group.desc ? el('div', { class: 'hint', text: group.desc }) : null]);
     for (const field of group.fields) {
-      card.appendChild(renderField(field, valueAt(data.config, field.path), (next) => setValueAt(data.config, field.path, next)));
+      // 值为 undefined 时回落到 schema 默认值：读路径写错时也不会显示成「空/未勾选」
+      const current = valueAt(data.config, field.path);
+      card.appendChild(
+        renderField(field, current === undefined ? field.default : current, (next) => setValueAt(data.config, field.path, next)),
+      );
     }
     panel.appendChild(card);
   }
@@ -351,10 +355,13 @@ async function renderSettings() {
 function renderField(field, value, onChange) {
   const wrap = el('div', { class: 'field' });
   const labelText = field.label || field.path;
+  // 给每个字段标上绝对路径：测试与排障时能一眼看出「这个框写的是哪一项」
+  wrap.setAttribute('data-field', field.path);
 
   if (field.widget === 'boolean') {
     const input = el('input', { type: 'checkbox' });
     input.checked = Boolean(value);
+    input.setAttribute('data-field', field.path);
     input.addEventListener('change', () => onChange(input.checked));
     wrap.appendChild(el('label', { class: 'inline' }, [input, labelText]));
     if (field.desc) wrap.appendChild(el('div', { class: 'hint', text: field.desc }));
@@ -396,7 +403,7 @@ function renderField(field, value, onChange) {
   } else if (field.widget === 'object') {
     const box = el('div', { class: 'item-card' });
     for (const child of field.fields || []) {
-      box.appendChild(renderField(child, valueAt(value, child.path), (next) => setValueAt(value, child.path, next)));
+      box.appendChild(renderField(child, valueAt(value, child.relPath), (next) => setValueAt(value, child.relPath, next)));
     }
     wrap.appendChild(box);
   } else if (field.widget === 'object-list') {
@@ -438,7 +445,7 @@ function renderObjectList(field, list, onChange) {
         ]),
       ]);
       for (const child of fields) {
-        card.appendChild(renderField(child, valueAt(item, child.path), (next) => setValueAt(item, child.path, next)));
+        card.appendChild(renderField(child, valueAt(item, child.relPath), (next) => setValueAt(item, child.relPath, next)));
       }
       box.appendChild(card);
     });

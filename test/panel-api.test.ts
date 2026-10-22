@@ -44,7 +44,11 @@ test('配置接口：读得到、分组元数据齐全、非法值被拒、改�
     const got = (await (await fetch(`${base}/api/config`, { headers: auth })).json()) as {
       ok: boolean;
       config: Record<string, unknown>;
-      groups: Array<{ key: string; label: string; fields: Array<{ path: string; widget: string; default: unknown }> }>;
+      groups: Array<{
+        key: string;
+        label: string;
+        fields: Array<{ path: string; relPath: string; widget: string; default: unknown; fields?: Array<{ path: string; relPath: string }> }>;
+      }>;
       issues: unknown[];
     };
     assert.equal(got.ok, true);
@@ -54,12 +58,27 @@ test('配置接口：读得到、分组元数据齐全、非法值被拒、改�
       assert.ok(keys.includes(expected), `缺少分组 ${expected}`);
     }
 
+    // 关键回归：组内字段的 path 必须是「组.字段」的绝对路径。
+    // （曾经只给字段名，面板把值写到顶层垃圾字段上，开关永远打不开。）
+    for (const group of got.groups) {
+      for (const field of group.fields) {
+        assert.ok(field.path.startsWith(`${group.key}.`), `${group.key} 组字段 ${field.path} 不是绝对路径`);
+        assert.equal(field.relPath, field.path.slice(group.key.length + 1));
+      }
+    }
+
     const llm = got.groups.find((group) => group.key === 'llm');
     assert.ok(llm, '要有 llm 分组');
-    const temp = llm?.fields.find((field) => field.path === 'temperature');
-    assert.ok(temp, 'temperature 字段要在描述里');
+    const temp = llm?.fields.find((field) => field.path === 'llm.temperature');
+    assert.ok(temp, 'temperature 字段要在描述里（绝对路径 llm.temperature）');
     assert.equal(temp?.widget, 'number');
     assert.equal(typeof temp?.default, 'number', '默认值要带上，面板「恢复默认」用');
+
+    // 嵌套对象里的字段：绝对路径带全前缀，relPath 相对父对象
+    const shareGroup = got.groups.find((group) => group.key === 'share');
+    const comment = shareGroup?.fields.find((field) => field.path === 'share.comment');
+    assert.ok(comment, 'share.comment 应该在描述里');
+    assert.equal(comment?.fields?.find((field) => field.relPath === 'maxChars')?.path, 'share.comment.maxChars');
 
     // 非法值：超范围必须 422，且给出可读的 path
     const bad = await fetch(`${base}/api/config`, { method: 'PUT', headers: write(csrf, auth), body: JSON.stringify({ llm: { temperature: 99 } }) });
@@ -76,6 +95,28 @@ test('配置接口：读得到、分组元数据齐全、非法值被拒、改�
 
     const after = (await (await fetch(`${base}/api/config`, { headers: auth })).json()) as { config: { llm: { temperature: number } } };
     assert.equal(after.config.llm.temperature, 0.7);
+
+    // 回归：只有未知顶层键（就是面板路径写错时的产物）必须被拒绝，不能静默接受
+    const junk = await fetch(`${base}/api/config`, { method: 'PUT', headers: write(csrf, auth), body: JSON.stringify({ enabled: true }) });
+    assert.equal(junk.status, 422, '只含未知顶层字段的补丁要拒绝');
+    const junkBody = (await junk.json()) as { message: string };
+    assert.match(junkBody.message, /不在配置里|未知/);
+
+    // 未知键与已知键混在一起时：已知的生效，未知的被丢掉并说明
+    const mixed = await fetch(`${base}/api/config`, {
+      method: 'PUT',
+      headers: write(csrf, auth),
+      body: JSON.stringify({ share: { enabled: true }, enabled: true, _exportedAt: 'x' }),
+    });
+    assert.equal(mixed.status, 200);
+    const mixedBody = (await mixed.json()) as { message: string };
+    assert.match(mixedBody.message, /忽略了 1 个未知字段/);
+    const savedAfter = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8')) as {
+      share?: { enabled?: boolean };
+      enabled?: unknown;
+    };
+    assert.equal(savedAfter.share?.enabled, true, '开关必须真的写进 share.enabled');
+    assert.equal(savedAfter.enabled, undefined, '不能把值写到顶层垃圾字段');
   });
 });
 

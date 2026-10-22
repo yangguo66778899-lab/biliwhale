@@ -158,8 +158,8 @@ export function buildReportSection(input: ReportInput): string {
   lines.push('');
   lines.push(`- 候选 ${counts.candidates} → 初筛 ${counts.screened} → 深读 ${counts.deepRead} → 挑中 ${counts.selected} → 分享 ${counts.shared}`);
   if (counts.skippedNoSubtitle > 0) lines.push(`- 因无字幕跳过 ${counts.skippedNoSubtitle} 条`);
-  if (input.result.favorite) lines.push(`- 收藏：${input.result.favorite.bvid}（${cleanNote(input.result.favorite.reason)}）`);
-  if (input.result.dynamic) lines.push(`- 动态：拟发（未执行）${input.result.dynamic.text.slice(0, 60)}`);
+  // 收藏与动态在 M4 才有写能力：M3 期间**不印刷**，否则等于替模型谎报「已经做了」。
+  // （模型有时会在正文里写「我把它收藏了」——只负责报告不跟着撒谎，正文那句靠提示词约束。）
   lines.push('');
 
   // 排障用的备注单独放，别混进给人看的那几段

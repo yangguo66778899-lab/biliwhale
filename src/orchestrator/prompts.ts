@@ -103,8 +103,15 @@ export function buildDeepPrompt(input: {
   });
 
   const shareNote = input.config.share.enabled
-    ? `分享开关是**开着**的（渠道：${input.config.share.via}；每天最多 ${input.config.share.dailyCap} 条；同视频 ${input.config.share.perVideoDays} 天一次）。`
-    : '分享开关是**关着**的：所有 `share.channel` 都要写 `"none"`，只写报告和日记。';
+    ? `分享开关是**开着**的（渠道：${input.config.share.via}；每天最多 ${input.config.share.dailyCap} 条；同视频 ${input.config.share.perVideoDays} 天一次）。
+   每条挑中的都要写 \`share.text\`（一句能直接发出去的评论，${input.config.share.comment.maxChars} 字以内）。
+   **发不发由代码的闸门决定**，你只负责写文案；拿不准也先写出来。`
+    : '分享开关是**关着**的：所有 `share.channel` 都写 `"none"`、`text` 留空，只写报告和日记。';
+
+  // M3 只有「评论」这一种写能力：收藏/动态/点赞/私信都还没接。
+  // 提示词必须说清楚，否则模型会在正文里写「我把它收藏了」——那是谎报（真机报告里出现过）。
+  const notBuiltYet =
+    '收藏 / 动态 / 点赞 / 私信这几种写能力**还没有接上**：相应字段一律写 null，并且**不要**在正文、日记、通知里说自己收藏了、点赞了、转发了、私信了。';
 
   return [
     '# 深读材料',
@@ -115,8 +122,8 @@ export function buildDeepPrompt(input: {
     '1. 对上面每条写 `why`（两三句，具体：哪句话/哪个点让你觉得值得）和 `oneliner`（一句话，给分享用）。',
     `2. 决定分享哪一条：最多一条，只从上面这些里挑，分数要 ≥ ${input.config.share.minScore}/20；决定不发就写 \`"channel":"none"\`。`,
     `   ${shareNote}`,
-    `3. 收藏：${input.config.fav.enabled ? '可以收，但要满足三条判据（三个月后还想点开 / 说得出为什么留 / 同类两条以上要说明好在哪）；不收写 null。' : '开关关着，写 null。'}`,
-    `4. 动态：${input.config.dynamic.enabled ? '可以拟一条纯文本动态；没想说的写 null。' : '开关关着，写 null。'}`,
+    `3. 收藏：写 null。${notBuiltYet}`,
+    '4. 动态：写 null。',
     '5. 写两本日记：',
     `   - \`diary.public\`（给用户看的）：散文体，可以对「你」说话，必须有具体细节（哪句话、第几分钟、评论区谁说了什么）。**不要写成汇报**。`,
     '   - `diary.private`（给自己看的）：不加滤镜，必须含「偏好校准」：哪条视频、用户什么反应、下次往哪偏。',
@@ -124,7 +131,7 @@ export function buildDeepPrompt(input: {
     '7. `report_md`：这一轮的日报正文（**2–4 段 Markdown**，写给用户看）。讲清「翻了几条、为什么只挑这条 / 为什么一条都没挑」，可以有具体细节；不要写成日记那种第一人称抒情，也不要照抄 `why` 的原句。',
     '8. `notes` 写本轮的异常/降级（没有就写空字符串）。',
     '',
-    input.dryRun ? '本轮是**只读预演**：即使决定了分享也不会真的发出去，你照常写就行。' : '',
+    input.dryRun ? '本轮是**只读预演**：即使决定了分享也不会真的发出去，你照常写文案就行（用户要看「本来会发什么」）。' : '',
     '',
     '输出格式（只输出这个 JSON）：',
     '```json',

@@ -13,7 +13,10 @@ import { buildDefaults } from './validate.ts';
 export type FieldWidget = 'text' | 'password' | 'number' | 'boolean' | 'enum' | 'string-list' | 'object' | 'object-list' | 'time';
 
 export interface FieldDescribe {
+  /** **绝对路径**（从配置根开始，如 `share.enabled`）：面板读写配置只认这个。 */
   path: string;
+  /** 相对路径（相对于它所在的对象/数组元素，如 `enabled`）：编辑嵌套对象时用这个。 */
+  relPath: string;
   label: string;
   desc?: string;
   widget: FieldWidget;
@@ -51,15 +54,18 @@ export function describeConfig(): GroupDescribe[] {
       key,
       label: field.label,
       ...(field.desc ? { desc: field.desc } : {}),
-      fields: Object.entries(field.fields).map(([name, child]) => describeField(child, name)),
+      // 组内字段的绝对路径必须是 `组.字段`：面板保存时按它写回配置。
+      // （曾经这里只给了字段名，结果面板把值写到了顶层垃圾字段上，开关永远打不开。）
+      fields: Object.entries(field.fields).map(([name, child]) => describeField(child, `${key}.${name}`, name)),
     });
   }
   return groups;
 }
 
-function describeField(spec: FieldSpec, path: string): FieldDescribe {
+function describeField(spec: FieldSpec, absPath: string, relPath: string): FieldDescribe {
   const base: FieldDescribe = {
-    path,
+    path: absPath,
+    relPath,
     label: spec.label,
     widget: widgetOf(spec),
     kind: spec.kind,
@@ -84,11 +90,15 @@ function describeField(spec: FieldSpec, path: string): FieldDescribe {
       break;
     case 'array':
       if (spec.maxItems !== undefined) base.maxItems = spec.maxItems;
-      base.item = describeField(spec.item, `${path}[]`);
+      // 数组元素：绝对路径带 `[]` 只是为了好看；面板编辑元素时用 relPath（从元素自己算起）
+      base.item = describeField(spec.item, `${absPath}[]`, '');
       break;
     case 'object': {
       const fields: FieldDescribe[] = [];
-      for (const [name, child] of Object.entries(spec.fields)) fields.push(describeField(child, `${path}.${name}`));
+      for (const [name, child] of Object.entries(spec.fields)) {
+        // relPath 永远相对「它所在的那个对象」：面板编辑嵌套对象时按它取值/写值
+        fields.push(describeField(child, `${absPath}.${name}`, name));
+      }
       base.fields = fields;
       break;
     }

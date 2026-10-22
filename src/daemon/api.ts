@@ -26,6 +26,8 @@ import { buildDiagBundle, diagFileName } from '../diagnostics.ts';
 import { approvePending, rejectPending, scanStrangerReplies } from '../orchestrator/pending.ts';
 import { makeReplyDraft } from '../orchestrator/replyDraft.ts';
 import { discoverModel, keyFingerprint } from '../llm/discovery.ts';
+import { SPEC } from '../config/spec.ts';
+import type { ObjectSpec } from '../config/spec.ts';
 import { deleteOwnComment } from '../orchestrator/manual.ts';
 import { runDoctor } from '../doctor.ts';
 import type { AutostartService } from '../lifecycle/autostart.ts';
@@ -160,18 +162,25 @@ export function createHandlers(deps: PanelDeps): AllHandlers {
     },
 
     async saveConfig(patch: unknown) {
+      // 只接受 spec 里有的顶层分组：未知键说明面板/调用方写错了路径（曾经因此把开关写到顶层垃圾字段上），
+      // 静默接受会让「保存成功但没生效」这种最难查的 bug 重现。
+      const cleaned = sanitizeConfigPatch(patch);
+      if (!cleaned.ok) {
+        return { ok: false, message: cleaned.message, issues: [{ path: cleaned.path, message: cleaned.message, severity: 'error' }] };
+      }
       const before = JSON.stringify(ctx.config.get().schedule);
-      const result = ctx.config.patch(patch);
+      const result = ctx.config.patch(cleaned.value);
       if (!result.ok) {
         return { ok: false, message: '配置没通过校验，已保留原值', issues: result.issues };
       }
       const after = JSON.stringify(ctx.config.get().schedule);
       if (before !== after) scheduler.invalidate();
       ctx.logger.setLevel(ctx.config.get().logging.level);
-      ctx.logger.event('config-save', '配置已保存（保存即生效）', { target: 'http' });
+      ctx.logger.event('config-save', '配置已保存（保存即生效）', { target: 'http', ...(cleaned.dropped.length > 0 ? { data: { dropped: cleaned.dropped } } : {}) });
+      const droppedNote = cleaned.dropped.length > 0 ? `；忽略了 ${cleaned.dropped.length} 个未知字段（${cleaned.dropped.slice(0, 5).join('、')}）` : '';
       return {
         ok: true,
-        message: before !== after ? '已保存；作息变了，下一次 tick 会重算计划' : '已保存，立即生效',
+        message: `${before !== after ? '已保存；作息变了，下一次 tick 会重算计划' : '已保存，立即生效'}${droppedNote}`,
         issues: result.issues.filter((issue) => issue.severity !== 'info'),
       };
     },
@@ -495,6 +504,35 @@ export function createHandlers(deps: PanelDeps): AllHandlers {
 }
 
 /* ---------------- 小工具 ---------------- */
+
+function sanitizeConfigPatch(
+  patch: unknown,
+): { ok: true; value: Record<string, unknown>; dropped: string[] } | { ok: false; path: string; message: string } {
+  if (typeof patch !== 'object' || patch === null || Array.isArray(patch)) {
+    return { ok: false, path: '', message: '配置补丁必须是一个对象' };
+  }
+  const known = new Set(Object.keys((SPEC as ObjectSpec).fields));
+  // 这些是导出产物/历史保留字段，不属于配置本体，直接丢掉（不报错）
+  const ignorable = new Set(['_exportedAt', '_unknown']);
+  const value: Record<string, unknown> = {};
+  const dropped: string[] = [];
+  for (const [key, item] of Object.entries(patch as Record<string, unknown>)) {
+    if (ignorable.has(key)) continue;
+    if (!known.has(key)) {
+      dropped.push(key);
+      continue;
+    }
+    value[key] = item;
+  }
+  if (Object.keys(value).length === 0 && dropped.length > 0) {
+    return {
+      ok: false,
+      path: dropped[0] ?? '',
+      message: `这些字段不在配置里：${dropped.slice(0, 6).join('、')}（多半是面板把值写到了错误路径）`,
+    };
+  }
+  return { ok: true, value, dropped };
+}
 
 function listMarkdown(dir: string): ListEntry[] {
   try {
