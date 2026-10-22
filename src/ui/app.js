@@ -65,9 +65,10 @@ function initToken() {
 }
 
 async function api(path, options = {}) {
-  if (!state.token) throw new Error('没有 token：请从托盘「打开面板」重新进入');
   const method = options.method || 'GET';
-  const headers = { authorization: `Bearer ${state.token}` };
+  // 凭据：地址里带过 token 就用 Bearer；否则靠内核种下的 HttpOnly 会话 cookie（浏览器自动带）
+  const headers = {};
+  if (state.token) headers.authorization = `Bearer ${state.token}`;
   if (method !== 'GET') {
     if (!state.csrf) await loadSession();
     headers['x-csrf-token'] = state.csrf;
@@ -88,7 +89,7 @@ async function api(path, options = {}) {
     data = { ok: false, error: text.slice(0, 200) };
   }
   if (res.status === 401) {
-    throw new Error('token 不对或已失效：请从托盘重新「打开面板」');
+    throw new Error('token 不对或已失效：请从托盘「打开面板」重新进入（地址里要带 ?token=）');
   }
   if (!res.ok && (!data || data.ok !== false)) {
     throw new Error((data && (data.error || data.message)) || `HTTP ${res.status}`);
@@ -988,18 +989,15 @@ function setPill(text, kind) {
 
 async function boot() {
   initToken();
-  if (!state.token) {
-    setPill('缺少 token', 'bad');
-    $('#main').innerHTML = '<div class="card issue error">没有 token：请从托盘右键「打开面板」，或手动在地址后面加 ?token=（token 在 runtime.json 里）。</div>';
-    return;
-  }
+  // 没 token 也行：内核种下的会话 cookie 就是凭据（浏览器自动带）
   try {
     await loadSession();
   } catch (err) {
-    setPill('连接失败', 'bad');
-    $('#main').innerHTML = `<div class="card issue error">${escapeHtml(String(err.message || err))}</div>`;
+    setPill('没连上', 'bad');
+    $('#main').innerHTML = `<div class="card issue error">${escapeHtml(String(err.message || err))}<br><br>如果是从托盘「打开面板」进来的，可能是内核刚重启过：关掉这个页面，再从托盘点一次。</div>`;
     return;
   }
+  setPill('已连接', 'ok');
   window.addEventListener('hashchange', () => {
     stopQrPolling();
     route();

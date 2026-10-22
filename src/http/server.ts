@@ -140,6 +140,8 @@ export interface ControlServerOptions {
 }
 
 const MAX_BODY_BYTES = 512 * 1024;
+/** 浏览器会话 cookie 名（HttpOnly，只在本进程内有效）。 */
+const SESSION_COOKIE = 'bw_session';
 const MAX_PORT_ATTEMPTS = 11;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const MIME: Record<string, string> = {
@@ -164,6 +166,8 @@ export class ControlServer {
   private readonly host: string;
   private readonly uiDir: string;
   private readonly startedAt = Date.now();
+  /** 会话 cookie 的值：随机、只在内存里，重启即换（不是 token 本身）。 */
+  private readonly sessionId = crypto.randomBytes(24).toString('hex');
 
   constructor(opts: ControlServerOptions) {
     this.handlers = opts.handlers;
@@ -249,11 +253,22 @@ export class ControlServer {
       return;
     }
 
+    // 凭据：URL/header 里的 token，或者「同一个浏览器」的会话 cookie。
+    // 为什么需要 cookie：页面的 <script src="/app.js"> 与 <link href="/style.css"> 是浏览器自己发的，
+    // 带不上 ?token=，只靠 token 会把子资源全挡成 401（面板只剩空壳，M3 真机踩到过）。
     const provided = extractToken(req, url);
-    if (!provided || !safeEqual(provided, this.token)) {
+    const tokenOk = provided !== null && safeEqual(provided, this.token);
+    const cookieOk = this.sessionOk(req);
+    if (!tokenOk && !cookieOk) {
+      if (method === 'GET' && !url.pathname.startsWith('/api/')) {
+        this.serveUnauthorizedPage(res);
+        return;
+      }
       this.sendJson(res, 401, { ok: false, error: '缺少或错误的 token（从 runtime.json 读取）' });
       return;
     }
+    // 用 token 进来、还没有会话 cookie → 种一个（HttpOnly，7 天，SameSite=Strict）
+    if (tokenOk && !cookieOk) res.setHeader('set-cookie', this.sessionCookieHeader());
 
     // 静态资源（只有 GET）
     if (method === 'GET' && !url.pathname.startsWith('/api/')) {
@@ -558,8 +573,51 @@ export class ControlServer {
     this.sendJson(res, 404, { ok: false, error: `没有这个接口：${method} ${url.pathname}` });
   }
 
-  private healthPayload(): HealthPayload {
-    const base = this.handlers.health();
+  /** 浏览器会话 cookie：HttpOnly（JS 读不到）、SameSite=Strict（跨站请求不会带）、7 天。 */
+  private sessionCookieHeader(): string {
+    return `${SESSION_COOKIE}=${this.sessionId}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${7 * 86_400}`;
+  }
+
+  /** 请求里的会话 cookie 是否就是本次进程签发的那个。 */
+  private sessionOk(req: http.IncomingMessage): boolean {
+    const raw = req.headers.cookie;
+    if (typeof raw !== 'string' || raw.length === 0) return false;
+    for (const part of raw.split(';')) {
+      const eq = part.indexOf('=');
+      if (eq <= 0) continue;
+      if (part.slice(0, eq).trim() !== SESSION_COOKIE) continue;
+      const value = part.slice(eq + 1).trim();
+      if (value.length === this.sessionId.length && safeEqual(value, this.sessionId)) return true;
+    }
+    return false;
+  }
+
+  /** 没凭据时的说明页（比一行 JSON 友好，也不泄漏任何数据）。 */
+  private serveUnauthorizedPage(res: http.ServerResponse): void {
+    const html = `<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>BiliWhale · 需要授权</title>
+<style>body{font:15px/1.7 system-ui,"Microsoft YaHei",sans-serif;max-width:560px;margin:12vh auto;padding:0 20px;color:#1d1d1f;background:#fbfbfa}
+h1{font-size:19px}code{background:rgba(127,127,127,.14);padding:1px 6px;border-radius:5px;font-size:13px}
+li{margin:6px 0}</style></head>
+<body><h1>这个面板需要地址里的 token</h1>
+<p>面板只认启动时打印的那个地址，或者托盘里的「打开面板」。可以这样进来：</p>
+<ul>
+<li>托盘右键 → <b>打开面板</b>（最省事）</li>
+<li>用 <code>npm run serve</code> 打印出来的完整地址（带 <code>?token=…</code>）打开</li>
+<li>从 <code>runtime.json</code> 里取 <code>url</code> 字段，整条粘到浏览器</li>
+</ul>
+<p>token 每次启动都会变；内核没在跑时这个页面也打不开。</p>
+</body></html>`;
+    res.writeHead(401, {
+      'content-type': 'text/html; charset=utf-8',
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff',
+      'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'none'; frame-ancestors 'none'",
+    });
+    res.end(html);
+  }
+
+  private healthPayload(): HealthPayload {    const base = this.handlers.health();
     return { ...base, ok: !base.lastError, version: this.version, uptimeSec: Math.round((Date.now() - this.startedAt) / 1000) };
   }
 

@@ -179,6 +179,12 @@ Phase 10 收尾     token 记账 / run 记录 / 事件    → state.noteRun + ad
 - **托盘用 C# 5 写**：`csc.exe`（.NET Framework 4.8 自带）只支持 C# 5，所以不能用字符串插值、`?.`、`nameof`。好处是零工具链：`npm run tray:build` 就能出 exe。
 - **自启双后端**：注册表是文档首选，但受限环境下 `reg.exe` 可能起不来（连 spawn 都会 EPERM）；回落写 Startup 文件夹的 `.cmd`，两个后端互相清理，状态里如实报告用了哪个。
 - **面板不用框架、不打包**：`src/ui/` 三个文件（html/js/css）直接由内核静态服务，`script-src 'self'`，没有内联脚本、没有 CDN、没有构建步骤。代价是没有组件化；好处是「离线可用」这条硬要求白拿，且 M5 打包时把三个文件内联进去就行。
+- **子资源靠会话 cookie 带凭据**：`<script src="/app.js">`、`<link href="/style.css">` 是浏览器自己发的请求，带不上 `?token=`。
+  所以用 token 打开页面时，内核种一个 `HttpOnly; SameSite=Strict` 的会话 cookie（随机值，只在本次进程内有效，7 天），
+  子资源与 API 都认它；写操作仍要 CSRF。**没有走这条路的测试，就是 0.4.0 漏掉的那个 bug**：
+  现在 `test/panel-assets.test.ts` 按浏览器顺序（先开页面拿 cookie、再不带 token 取子资源）验证。
+- **没凭据的导航给说明页**：直接访问 `/` 而没有 token/cookie 时回 401 的 **HTML**，告诉人「从托盘打开 / 用打印出来的地址」，
+  而不是甩一行 JSON（浏览器里那行 JSON 只会让人以为程序坏了）。API 仍然回 401 JSON。
 - **设置页不写死字段**：表单完全由 `config/describe.ts` 从 `config/spec.ts` 生成（20 组 96 字段）。加一个配置项只改 schema，面板自动出现；不变式测试守着「每个字段都有 label 与默认值」。
 - **写操作要 CSRF**：token 放在 URL 里会被浏览历史/截图带走，而 `127.0.0.1` 上的服务对同机进程是不设防的。所以：GET 只读；POST/PUT 额外校验 `x-csrf-token`（`/api/session` 发放，内存里存，重启即换）；再加 Host 校验与「不返回 CORS 头」。
 - **静态资源走白名单**：只允许 `.html/.js/.css/.svg/.png/.ico/.json`，并且解析后的绝对路径必须落在 `src/ui` 里；URL 规范化的 `..` 折叠 + 我们自己的 `..` 检查是双保险（有测试）。

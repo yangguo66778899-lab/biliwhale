@@ -78,7 +78,7 @@ shell\BiliWhaleTray.exe
 node src/cli.ts run --now --dry
 
 # 6) 验证
-npm test              # 198 个用例：写层/闸门/幂等/复核/风控/审批/面板/登录/二维码/调度/守护进程/离线整轮
+npm test              # 201 个用例：写层/闸门/幂等/复核/风控/审批/面板/登录/二维码/调度/守护进程/离线整轮
 npm run m0:offline    # 夹具整轮：不联网、不需要凭据
 npm run m0:live-read  # 真实 B 站数据 + 占位模型（不代表模型质量）
 npm run smoke:bili    # 真 B 站只读冒烟：WBI / 搜索 / 视频 / 评论 / 字幕轨
@@ -98,8 +98,19 @@ npm run smoke:bili    # 真 B 站只读冒烟：WBI / 搜索 / 视频 / 评论 /
 | 日志 | 事件流（级别过滤）+ 下载脱敏诊断包 |
 | 关于 | 版本、数据目录、模型、今日预算、快速操作 |
 
-面板的三个前提：只绑 `127.0.0.1`；所有请求要 Bearer token；写操作还要 `x-csrf-token`（页面自动处理）。
-token 在 `runtime.json`（权限 600），关掉页面不失效，换一个端口就换一个 token。
+面板的三个前提：只绑 `127.0.0.1`；所有请求要凭据；写操作还要 `x-csrf-token`（页面自动处理）。
+
+**怎么打开**（三选一，后两种最省事）：
+
+- 托盘右键 → **打开面板**
+- 用 `serve` 打印出来的完整地址（带 `?token=…`）
+- 从 `runtime.json` 的 `url` 字段复制
+
+**为什么第一次必须带 token**：内核用它认人。用 token 打开后，内核会给这个浏览器种一个
+`HttpOnly + SameSite=Strict` 的会话 cookie（7 天、只在本次进程内有效），此后刷新、子资源、API 都靠它，
+地址栏里的 token 会被页面自动抹掉（免得留在浏览历史里）。**内核一重启，旧 cookie 就失效**——从托盘再点一次即可。
+
+顺手提醒：如果面板打开是空白/「连接中…」不动，先 `Ctrl+F5` 硬刷新一次；还不行就看命令行窗口有没有报 401。
 
 ### 常驻形态（M1）
 
@@ -182,7 +193,7 @@ src/
 └── shared/             # 类型、日志（脱敏）、原子写、时间、错误分类
 shell/BiliWhaleTray.cs  # C# 5 托盘（源码入库，exe 由 npm run tray:build 生成）
 scripts/                # smoke-bili.ts（真接口只读冒烟）、smoke-panel.mts、build-tray.ps1
-test/                   # 单元 + 集成（198 个用例，含二维码对拍与面板渲染）
+test/                   # 单元 + 集成（201 个用例，含二维码对拍与面板渲染）
 fixtures/               # 离线夹具（B 站响应、模型输出）
 docs/                   # 架构说明、B 站接口规格、M0/M1/M2/M3 验收记录
 ```
