@@ -83,6 +83,9 @@ export function buildReportSection(input: ReportInput): string {
       lines.push(`- ${item.oneliner}${meta ? ` —— [${meta.title}](${meta.url})` : ''}`);
     }
     if (result.skipped.length > 0) lines.push(`- 跳过 ${result.skipped.length} 条（${summarizeSkip(result)}）`);
+    // brief 也要留下降级/失效这类关键信息，否则用户看不出「今天为什么这么少」
+    const briefNotes = input.notes.map(cleanNote).filter((note) => note.length > 0);
+    if (briefNotes.length > 0) lines.push(`- 备注：${briefNotes.join('；')}`);
     lines.push('');
     return `${lines.join('\n')}\n`;
   }
