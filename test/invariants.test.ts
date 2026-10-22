@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 /**
  * 把需求文档里的硬约束变成自动检查。
@@ -46,10 +47,17 @@ test('零 Python：源码里不 spawn python / 不调用 pip / venv', () => {
   assert.deepEqual(hits, [], `不该有任何 Python 依赖：${JSON.stringify(hits)}`);
 });
 
-test('M0 不启动子进程：没有 child_process 的 spawn/exec/execFile', () => {
+test('子进程只允许出现在「开机自启」这一处，且必须带 windowsHide 与超时', () => {
   // 注意用 (?<!\.) 排除 RegExp#exec —— 那是正则方法，不是进程
-  const hits = grep(SOURCE_FILES, /child_process|spawnSync\s*\(|(?<!\.)\bspawn\s*\(|execFile\s*\(|execSync\s*\(|(?<!\.)\bexec\s*\(/);
-  assert.deepEqual(hits, [], `M0 不该有子进程：${JSON.stringify(hits)}`);
+  const pattern = /child_process|spawnSync\s*\(|(?<!\.)\bspawn\s*\(|execFile\s*\(|execSync\s*\(|(?<!\.)\bexec\s*\(/;
+  const hits = grep(SOURCE_FILES, pattern);
+  const allowedFile = path.join('lifecycle', 'autostart.ts');
+  const disallowed = hits.filter((hit) => !hit.file.endsWith(allowedFile));
+  assert.deepEqual(disallowed, [], `只有 autostart.ts 可以起子进程（reg.exe）：${JSON.stringify(disallowed)}`);
+
+  const text = fs.readFileSync(path.join(SRC, 'lifecycle', 'autostart.ts'), 'utf8');
+  assert.match(text, /windowsHide:\s*true/, '子进程必须隐藏窗口');
+  assert.match(text, /timeout:\s*\d+/, '子进程必须带超时');
 });
 
 test('C3：源码与夹具里没有直播 / 弹幕相关字段或能力', () => {
@@ -72,14 +80,10 @@ test('M0 没有任何写 B 站的接口路径', () => {
   const hits = grep(SOURCE_FILES, new RegExp(writeEndpoints.map((e) => e.replace(/[/.]/g, '\\$&')).join('|')));
   assert.deepEqual(hits, [], `M0 代码里不该存在写接口：${JSON.stringify(hits)}`);
 
-  // 也不允许「非 GET」的业务请求：http 层只给 api 层留了 GET 的用法
-  const postHits = grep(SOURCE_FILES, /method:\s*['"]POST['"]/);
-  const allowed = postHits.filter((hit) => hit.file.includes('llm') || hit.file.includes('shared'));
-  assert.deepEqual(
-    postHits.filter((h) => !allowed.includes(h)),
-    [],
-    `B 站请求不该用 POST：${JSON.stringify(postHits)}`,
-  );
+  // 也不允许对 B 站发起非 GET 请求：任何「提到 bilibili.com 的文件」里都不能有 POST
+  const biliFiles = SOURCE_FILES.filter((file) => fs.readFileSync(file, 'utf8').includes('bilibili.com'));
+  const biliPost = grep(biliFiles, /method:\s*['"]POST['"]/);
+  assert.deepEqual(biliPost, [], `对 B 站的请求只能是 GET：${JSON.stringify(biliPost)}`);
 });
 
 test('零运行时依赖：package.json 只有 typescript 与 @types/node', () => {
@@ -97,8 +101,64 @@ test('凭据与密钥不会出现在源码常量里', () => {
   assert.deepEqual(hits, [], `源码里不该有真凭据：${JSON.stringify(hits)}`);
 });
 
-test('必需的文件都在（运行说明、许可证、归属、架构、接口规格）', () => {
-  for (const file of ['README.md', 'LICENSE', 'NOTICE', 'CHANGELOG.md', 'docs/ARCHITECTURE.md', 'docs/bili-readonly-api-spec.md']) {
+test('没有不可擦除的 TS 语法（参数属性会让 node 直接跑不起来）', () => {
+  // Node 的 strip-only 模式不支持 constructor(private x)。tsc 不报错，运行才炸 —— 所以在这里拦。
+  const paramProps = grep(SOURCE_FILES, /constructor\s*\([^)]*\b(?:private|public|protected)\s+(?:readonly\s+)?\w+\s*:/s);
+  assert.deepEqual(paramProps, [], `不要在构造函数参数里写 private/public（改成显式字段）：${JSON.stringify(paramProps)}`);
+
+  const enums = grep(SOURCE_FILES, /^\s*(?:export\s+)?(?:const\s+)?enum\s+\w+/m);
+  assert.deepEqual(enums, [], `不要用 enum（用联合类型 + as const）：${JSON.stringify(enums)}`);
+});
+
+test('每个 src 模块都能被 Node 真的加载（入口除外）', async () => {
+  // 入口（cli.ts）有副作用会真的跑起来，跳过；其它模块都必须是可加载的纯模块。
+  const modules = SOURCE_FILES.filter((file) => !file.endsWith('cli.ts'));
+  const failures: string[] = [];
+  for (const file of modules) {
+    try {
+      await import(pathToFileURL(file).href);
+    } catch (err) {
+      failures.push(`${path.relative(ROOT, file)}: ${err instanceof Error ? err.message.split('\n')[0] : String(err)}`);
+    }
+  }
+  assert.deepEqual(failures, [], `有模块加载失败：\n${failures.join('\n')}`);
+});
+
+test('必需的文件都在（运行说明、许可证、归属、架构、接口规格、托盘）', () => {
+  for (const file of [
+    'README.md',
+    'LICENSE',
+    'NOTICE',
+    'CHANGELOG.md',
+    'docs/ARCHITECTURE.md',
+    'docs/bili-readonly-api-spec.md',
+    'shell/BiliWhaleTray.cs',
+    'scripts/build-tray.ps1',
+  ]) {
     assert.ok(fs.existsSync(path.join(ROOT, file)), `缺少 ${file}`);
   }
+});
+
+test('编码约定：.ps1 必须有 BOM（PowerShell 5.1 靠它认 UTF-8），.json 必须没有 BOM', () => {
+  const ps1 = walk(ROOT, ['.ps1']).filter((file) => !file.includes('node_modules'));
+  for (const file of ps1) {
+    const head = fs.readFileSync(file).subarray(0, 3);
+    assert.deepEqual([...head], [0xef, 0xbb, 0xbf], `${path.relative(ROOT, file)} 缺 UTF-8 BOM，PowerShell 5.1 会把中文读成乱码`);
+  }
+
+  const json = walk(ROOT, ['.json']).filter((file) => !file.includes('node_modules') && !file.includes('.npm-cache'));
+  for (const file of json) {
+    const head = fs.readFileSync(file).subarray(0, 3);
+    assert.notDeepEqual([...head], [0xef, 0xbb, 0xbf], `${path.relative(ROOT, file)} 带 BOM，JSON.parse 会失败`);
+  }
+});
+
+test('托盘源码里没有 B 站写接口，也没有直播/弹幕', () => {
+  const trayFile = path.join(ROOT, 'shell', 'BiliWhaleTray.cs');
+  const text = fs.readFileSync(trayFile, 'utf8');
+  for (const needle of ['bilibili.com', '/x/v2/reply/add', 'send_msg', 'danmaku', '直播间', '直播']) {
+    assert.equal(text.includes(needle), false, `托盘不该出现「${needle}」：它只和本地内核说话`);
+  }
+  // 只允许访问本机控制接口
+  assert.match(text, /127\.0\.0\.1/);
 });

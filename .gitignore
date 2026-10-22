@@ -4,6 +4,10 @@ dist/
 *.tsbuildinfo
 .npm-cache/
 
+# 托盘构建产物（源码与构建脚本入库，exe 不入库）
+shell/*.exe
+shell/tray-selftest.txt
+
 # 测试临时目录
 test/.tmp/
 

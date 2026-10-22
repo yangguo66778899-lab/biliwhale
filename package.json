@@ -1,6 +1,6 @@
 {
   "name": "biliwhale",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "常驻 Windows 的 B 站「养鱼」程序内核：有自己的作息，只调用 DeepSeek，零 Python、零 DSH 依赖",
   "type": "module",
@@ -10,12 +10,14 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --test --test-isolation=none --test-concurrency=1 \"test/*.test.ts\"",
+    "test": "node --test --test-isolation=none --test-concurrency=1 --test-force-exit \"test/*.test.ts\"",
     "run": "node src/cli.ts",
+    "serve": "node src/cli.ts serve",
     "m0": "node src/cli.ts run --now --dry",
     "m0:offline": "node src/cli.ts run --now --dry --fixtures",
     "m0:live-read": "node src/cli.ts run --now --dry --mock-model",
     "smoke:bili": "node scripts/smoke-bili.ts",
+    "tray:build": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-tray.ps1",
     "doctor": "node src/cli.ts doctor"
   },
   "devDependencies": {
