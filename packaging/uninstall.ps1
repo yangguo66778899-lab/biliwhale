@@ -6,16 +6,27 @@ param(
   [switch]$RemoveData,
   [switch]$NoRegister,
   [switch]$Yes,
-  [string]$Target = ""
+  [string]$Target = "",
+  [string]$DataDir = ""
 )
+
+# uninstall.cmd 直接透传 %*：把 --remove-data / --yes / --no-register 也认下来（审计 §3.39）
+foreach ($extra in $args) {
+  switch -Regex ($extra) {
+    '^--?remove-?data$' { $RemoveData = $true }
+    '^--?yes$' { $Yes = $true }
+    '^--?no-?register$' { $NoRegister = $true }
+  }
+}
 
 $ErrorActionPreference = "Stop"
 $appName = "BiliWhale"
 if ([string]::IsNullOrWhiteSpace($Target)) {
   $Target = Join-Path $env:LOCALAPPDATA "Programs\$appName"
 }
-$dataDir = Join-Path $env:APPDATA $appName
-$localDir = Join-Path $env:LOCALAPPDATA $appName
+$dataDir = if ([string]::IsNullOrWhiteSpace($DataDir)) { Join-Path $env:APPDATA $appName } else { $DataDir }
+# 自定义数据目录时，日志/runtime.json 在 <data>\local
+$localDir = if ([string]::IsNullOrWhiteSpace($DataDir)) { Join-Path $env:LOCALAPPDATA $appName } else { Join-Path $DataDir "local" }
 
 function Write-Step($text) { Write-Host "  $text" }
 
@@ -32,9 +43,16 @@ try {
   if (Test-Path $runtimeFile) {
     $rt = Get-Content $runtimeFile -Raw | ConvertFrom-Json
     if ($rt.port -and $rt.token) {
-      Invoke-RestMethod -Method Post -Uri ("http://127.0.0.1:" + $rt.port + "/api/shutdown") -Headers @{ authorization = "Bearer " + $rt.token } -TimeoutSec 3 | Out-Null
-      Write-Step "已请内核优雅退出"
-      Start-Sleep -Seconds 1
+      try {
+        # 写操作要 CSRF（审计 §2.13）；不然停不掉内核，下面删目录就会撞「文件被占用」
+        $session = Invoke-RestMethod -Method Get -Uri ("http://127.0.0.1:" + $rt.port + "/api/session") -Headers @{ authorization = "Bearer " + $rt.token } -TimeoutSec 3
+        $headers = @{ authorization = "Bearer " + $rt.token; "x-csrf-token" = $session.csrfToken }
+        Invoke-RestMethod -Method Post -Uri ("http://127.0.0.1:" + $rt.port + "/api/shutdown") -Headers $headers -TimeoutSec 5 | Out-Null
+        Write-Step "已请内核优雅退出"
+        Start-Sleep -Seconds 2
+      } catch {
+        Write-Step "优雅退出没成功（$($_.Exception.Message)），继续尝试删程序目录"
+      }
     }
   }
 } catch {
@@ -76,8 +94,21 @@ try {
 
 # 4) 程序目录
 if (Test-Path $Target) {
-  Remove-Item -Recurse -Force $Target
-  Write-Step "已删程序目录"
+  try {
+    Remove-Item -Recurse -Force $Target -ErrorAction Stop
+    Write-Step "已删程序目录"
+  } catch {
+    # 内核可能还在收尾（node.exe 占着文件）：等一下再试一次，还不行就给人话（审计 §2.14）
+    Write-Step "第一次删除失败（$($_.Exception.Message)），2 秒后重试"
+    Start-Sleep -Seconds 2
+    try {
+      Remove-Item -Recurse -Force $Target -ErrorAction Stop
+      Write-Step "已删程序目录（重试成功）"
+    } catch {
+      Write-Step "程序目录删不掉：$($_.Exception.Message)"
+      Write-Step "多半是内核还在跑：托盘右键退出，或在任务管理器结束 node.exe，再跑一次卸载"
+    }
+  }
 } else {
   Write-Step "程序目录不存在（可能已经删过）"
 }

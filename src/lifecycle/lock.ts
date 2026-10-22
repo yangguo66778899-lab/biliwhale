@@ -2,9 +2,10 @@
  * 单实例锁。
  *
  * 职责：保证同一台机器上只有一个内核在跑；第二个实例启动时能知道「是谁占着」并退出。
- *   锁文件里记 pid + 启动时间；判定存活用 `process.kill(pid, 0)`：
- *   - 活着 → 拒绝启动（调用方去唤起已有实例）
- *   - 死了 / 文件超过 24 小时 → 视为陈旧，清掉重来
+ *   锁文件里记 pid + 启动时间；判定存活优先用「心跳文件是否新鲜」，其次才是 `process.kill(pid, 0)`：
+ *   - 心跳新鲜（默认 3 分钟内）→ 一定活着，**绝不**因为 uptime 长就判陈旧（常驻程序跑过 24h 是常态）
+ *   - 进程不在了 → 陈旧，清掉重来
+ *   - 进程在、但没有新鲜心跳（可能是 Windows 复用了 pid）→ 超过 24 小时才当陈旧
  * 不做什么：不做跨用户协调（单人单账号）、不抢锁等待（拿不到就退出）。
  */
 
@@ -45,10 +46,23 @@ export class InstanceLock {
   private readonly startedAt: string;
   private acquired = false;
 
-  constructor(file: string, options: { pid?: number; startedAt?: Date } = {}) {
+  /** 心跳文件：有它就能区分「真活着」与「pid 被复用」。 */
+  private readonly heartbeatFile: string | null;
+  /** 心跳多久算新鲜（默认 3 分钟 = 3 次心跳间隔）。 */
+  private readonly heartbeatFreshMs: number;
+  /** 测试注入时钟。 */
+  private readonly nowMs: () => number;
+
+  constructor(
+    file: string,
+    options: { pid?: number; startedAt?: Date; heartbeatFile?: string; heartbeatFreshMs?: number; now?: () => Date } = {},
+  ) {
     this.file = file;
     this.pid = options.pid ?? process.pid;
     this.startedAt = (options.startedAt ?? new Date()).toISOString();
+    this.heartbeatFile = options.heartbeatFile ?? null;
+    this.heartbeatFreshMs = options.heartbeatFreshMs ?? 3 * 60_000;
+    this.nowMs = () => (options.now ? options.now() : new Date()).getTime();
   }
 
   /** 读当前锁（没有/坏掉都返回 null）。 */
@@ -139,8 +153,24 @@ export class InstanceLock {
   }
 
   private isStale(holder: LockInfo): boolean {
+    // 进程不在了 → 一定是陈旧锁
+    if (!isProcessAlive(holder.pid)) return true;
+    // 进程在、心跳新鲜 → 一定是真的活着（哪怕已经跑了 30 天）
+    if (this.heartbeatFresh()) return false;
+    // 进程在但心跳不新鲜：可能是系统复用了这个 pid。只在「太老」时才敢当陈旧。
     const started = Date.parse(holder.startedAt);
     if (!Number.isFinite(started)) return true;
-    return Date.now() - started > STALE_AFTER_MS;
+    return this.nowMs() - started > STALE_AFTER_MS;
+  }
+
+  /** 心跳文件是否在 `heartbeatFreshMs` 内被写过。 */
+  private heartbeatFresh(): boolean {
+    if (!this.heartbeatFile) return false;
+    try {
+      const stat = fs.statSync(this.heartbeatFile);
+      return this.nowMs() - stat.mtimeMs <= this.heartbeatFreshMs;
+    } catch {
+      return false;
+    }
   }
 }

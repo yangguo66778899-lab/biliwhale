@@ -32,6 +32,8 @@ export interface TickInput {
   lastFiredMinute?: number | null;
   /** 配置变更后置 true，强制重算计划。 */
   invalidate?: boolean;
+  /** 今天已经醒过几次（用于重算时扣额度；不传按 0 算）。 */
+  wakesAlready?: number;
 }
 
 export type TickOutcome =
@@ -63,6 +65,7 @@ export function tick(input: TickInput): TickOutcome {
       // 跨天时把「昨天排的、还没到点」的槽位带过来（跨零点窗口的尾巴）；
       // 配置变更时**不带**：用户改了窗口，就该按新窗口重排，旧时刻作废。
       carryOver: stale ? carryOverSlots(plan, nowMs) : [],
+      wakesAlready: input.wakesAlready ?? 0,
     } satisfies GenerateInput);
     if (!generated) return { kind: 'none', reason: '没有可用的作息窗口，只能手动跑' };
     return { kind: 'replanned', plan: generated, generated: stale };

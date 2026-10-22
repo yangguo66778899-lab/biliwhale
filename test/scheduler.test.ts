@@ -204,3 +204,63 @@ test('计划在真实默认配置下能生成（不依赖注入）', () => {
     }
   }
 });
+
+
+/* ---------------- 唤醒额度：重算不能多送（审计 §2.5） ---------------- */
+
+test('额度：今天已醒 1 次、上限 1 → 重算后一个槽位都没有', () => {
+  const now = at('2026-10-21', '20:10');
+  const plan = generateDayPlan({
+    now,
+    windows: [evening],
+    skipChance: 0,
+    maxWakesPerDay: 1,
+    wakesAlready: 1,
+    rand: scriptedRandom([1230]),
+  });
+  assert.ok(plan);
+  assert.deepEqual(plan?.slots, []);
+  assert.equal(plan?.targetWakes, 1);
+  assert.match(plan?.reason ?? '', /已经醒过 1 次/);
+});
+
+test('额度：上限 3、已醒 2 → 最多再排 1 个槽位', () => {
+  const now = at('2026-10-21', '12:00');
+  const plan = generateDayPlan({
+    now,
+    windows: [noon],
+    skipChance: 0,
+    maxWakesPerDay: 3,
+    wakesAlready: 2,
+    rand: scriptedRandom([800]),
+  });
+  assert.equal(plan?.slots.length, 1);
+});
+
+test('额度：已醒满 3 次时，连「今天不想看」也不排（skip 不能绕过硬上限）', () => {
+  const now = at('2026-10-21', '21:00');
+  const plan = generateDayPlan({
+    now,
+    windows: [evening],
+    skipChance: 1,
+    maxWakesPerDay: 3,
+    wakesAlready: 3,
+    rand: scriptedRandom([1230]),
+  });
+  assert.ok(plan);
+  assert.notEqual(plan?.action, 'skip');
+  assert.deepEqual(plan?.slots, []);
+});
+
+test('额度：新的一天（已醒 0）才按新窗口排 20:xx', () => {
+  const now = at('2026-10-22', '00:05');
+  const plan = generateDayPlan({
+    now,
+    windows: [evening],
+    skipChance: 0,
+    maxWakesPerDay: 1,
+    wakesAlready: 0,
+    rand: scriptedRandom([1230]),
+  });
+  assert.equal(plan?.slots[0]?.atText, '20:30');
+});

@@ -30,6 +30,8 @@ export interface WatchDeps {
   state: AppStateStore;
   pending: PendingStore;
   secrets: SecretsService;
+  /** 反馈账本：主人回复/@ 我们 = 用户表态（审计 §2.4）。 */
+  feedback?: { markUserSignal: (at?: Date) => void };
   now?: () => Date;
   /** 拟回复生成器（模型）；没注入就不建草稿。 */
   draft?: (input: { source: string; uname: string; videoTitle: string; maxChars: number }) => Promise<string | null>;
@@ -104,6 +106,8 @@ export async function watchComments(deps: WatchDeps): Promise<WatchResult> {
       continue;
     }
     const fromOwner = owner.ok && item.mid === owner.mid;
+    // 主人在评论区回我们/@ 我们 = 用户表态（§10.4 反馈校准）
+    if (fromOwner) deps.feedback?.markUserSignal(now());
     const draft = deps.draft
       ? await deps.draft({ source: item.content, uname: item.uname, videoTitle: String(item.oid), maxChars })
       : null;

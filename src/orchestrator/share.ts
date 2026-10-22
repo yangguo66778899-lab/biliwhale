@@ -26,13 +26,14 @@ import { resolveOwner } from '../account/owner.ts';
 import type { GateDecision } from './gate.ts';
 import { localIso } from '../shared/time.ts';
 import { humanError } from '../shared/errors.ts';
+import { composeShareDm } from './dm.ts';
 
 export type ShareStatus = 'sent' | 'held' | 'unverified' | 'failed' | 'denied' | 'dry_run';
 
 export interface ShareAttempt {
   bvid: string;
   aid: number;
-  channel: 'comment' | 'none';
+  channel: 'comment' | 'dm' | 'none';
   status: ShareStatus;
   /** 实际（或将）发送的文本。 */
   content: string;
@@ -56,14 +57,28 @@ export interface ShareDeps {
   /** 登录账号 mid（发送方身份，用来挡「主人 = 自己」）。不传就取不到 → 主人校验会当作未配置。 */
   selfMid?: () => number;
   now?: () => Date;
+  /** 反馈账本：发送成功后记「上次分享时间」，沉默衰减才有参考点（审计 §2.4）。 */
+  feedback?: { markShare: (at?: Date) => void };
   /** 测试用：不发真请求、不等待复核间隔。 */
   verifyDelaysMs?: number[];
   skipWait?: boolean;
 }
 
 export interface ShareInput {
-  /** 挑中的条目（顺序即优先级）。 */
-  items: Array<{ bvid: string; aid: number; score: number; share: ShareProposal | undefined; inDeepRead: boolean }>;
+  /** 挑中的条目（顺序即优先级）。私信渠道要用 title/oneliner 拼合并文案。 */
+  items: Array<{
+    bvid: string;
+    aid: number;
+    score: number;
+    share: ShareProposal | undefined;
+    inDeepRead: boolean;
+    title?: string;
+    oneliner?: string;
+  }>;
+  /** 私信渠道的收件人（主人 UID）。没配主人时 dm 渠道会被拒，而不是发给自己。 */
+  dmReceiver?: number;
+  /** 私信渠道的发送方（登录账号 UID）。 */
+  dmSender?: number;
   /** 今天已经用掉的分享额度（发送前快照）。 */
   todayShares: number;
   /** 沉默档位给出的额度。 */
@@ -138,6 +153,8 @@ export async function executeShares(deps: ShareDeps, input: ShareInput): Promise
   const cfg = deps.config;
   const attempts: ShareAttempt[] = [];
   const notes: string[] = [];
+  /** 私信渠道：过闸的条目先排队，最后合并成一条发出（§7.8：一轮合并一条）。 */
+  const dmQueue: Array<{ attempt: ShareAttempt; item: ShareInput['items'][number] }> = [];
   const report: ShareReport = { attempts, notes, sent: 0, dryRun: 0, denied: 0, failed: 0, unverified: 0, held: 0, stopped: null };
 
   let riskStop = input.riskStop === true;
@@ -149,7 +166,8 @@ export async function executeShares(deps: ShareDeps, input: ShareInput): Promise
     // 主人是「另一个人」：@ 用主人昵称，不用登录账号的昵称。
     const owner = resolveOwner(cfg, deps.selfMid?.() ?? 0);
     const atName = owner.name;
-    const channel: 'comment' | 'none' = item.share?.channel === 'comment' ? 'comment' : 'none';
+    const channel: 'comment' | 'dm' | 'none' =
+      item.share?.channel === 'comment' ? 'comment' : item.share?.channel === 'dm' ? 'dm' : 'none';
 
     const attempt: ShareAttempt = {
       bvid: item.bvid,
@@ -163,13 +181,6 @@ export async function executeShares(deps: ShareDeps, input: ShareInput): Promise
       notes: [],
     };
     attempts.push(attempt);
-
-    // M3 只有评论；私信/动态在 M4
-    if (item.share?.channel === 'dm') {
-      attempt.deny.push('M3 只支持评论分享（私信在 M4）');
-      report.denied += 1;
-      continue;
-    }
 
     // 先过闸门、再看文案：这样「开关关着」才是报告里写的原因（而不是「模型没给文案」）
     const decision: GateDecision = gateShare({
@@ -197,6 +208,14 @@ export async function executeShares(deps: ShareDeps, input: ShareInput): Promise
       attempt.deny.push(...decision.deny);
       report.denied += 1;
       notes.push(`没发 ${item.bvid}：${decision.deny.join('；')}`);
+      continue;
+    }
+
+    // 私信渠道：同样过闸（分数/额度/冷却/深读都在上面判过），过了就排队，最后合并成一条
+    if (channel === 'dm') {
+      attempt.content = item.oneliner ?? '';
+      attempt.notes.push('排队：与本轮其它私信分享合并成一条');
+      dmQueue.push({ attempt, item });
       continue;
     }
 
@@ -323,6 +342,8 @@ export async function executeShares(deps: ShareDeps, input: ShareInput): Promise
     attempt.rpid = outcome.rpid;
     attempt.verified = verification.ok;
     attempt.status = verification.ok ? 'sent' : verification.held ? 'held' : 'unverified';
+    // 只要真的发出去了（含被挂起）就记一笔：沉默衰减看的是「我们最近有没有开口」
+    if (verification.ok || verification.held) deps.feedback?.markShare(now());
     if (verification.ok) report.sent += 1;
     else if (verification.held) report.held += 1;
     else report.unverified += 1;
@@ -362,6 +383,12 @@ export async function executeShares(deps: ShareDeps, input: ShareInput): Promise
       deps.logger.event('share', '复核未通过', { level: 'warn', target: 'share', data: { bvid: item.bvid, rpid: outcome.rpid ?? null } });
     }
   }
+
+  await flushShareDm(deps, input, report, notes, dmQueue, {
+    writesToday: countWritesToday(deps.quota, now()) + report.sent + report.held,
+    dryRun: input.dryRun,
+    now,
+  });
 
   if (attempts.length === 0) notes.push('这一轮没有可分享的条目');
   return report;
@@ -421,6 +448,116 @@ function countWritesToday(quota: QuotaLedger, now: Date): number {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * 私信分享的实际发送（合并成一条）。
+ *
+ * 为什么放在这里而不是 round.ts：它必须和评论分享共用同一道闸门与账本，
+ * 否则就是一条绕过 §10.1 的写入通道（审计 §3.2）。
+ */
+async function flushShareDm(
+  deps: ShareDeps,
+  input: ShareInput,
+  report: ShareReport,
+  notes: string[],
+  queue: Array<{ attempt: ShareAttempt; item: ShareInput['items'][number] }>,
+  ctx: { writesToday: number; dryRun: boolean; now: () => Date },
+): Promise<void> {
+  if (queue.length === 0) return;
+  const cfg = deps.config;
+  const receiver = input.dmReceiver ?? 0;
+  const denyAll = (reason: string): void => {
+    for (const entry of queue) {
+      entry.attempt.deny.push(reason);
+      report.denied += 1;
+      notes.push(`没发 ${entry.item.bvid}：${reason}`);
+    }
+  };
+
+  if (receiver <= 0) {
+    denyAll('主人还没配置（私信分享必须发给主人，不能发给自己）');
+    return;
+  }
+  if (cfg.safety.killSwitch) {
+    denyAll('急停开关开着');
+    return;
+  }
+  if (deps.state.inRiskCooldown(ctx.now())) {
+    denyAll('撞风控后的冷却期内，不发');
+    return;
+  }
+  if (ctx.writesToday + 1 > cfg.safety.maxWritesPerDay) {
+    denyAll(`超过每日写操作总上限（${cfg.safety.maxWritesPerDay}）`);
+    return;
+  }
+
+  const items = queue.map((entry) => ({
+    bvid: entry.item.bvid,
+    title: entry.item.title ?? entry.item.bvid,
+    desc: '',
+    understanding: entry.item.oneliner ?? '',
+  }));
+  const text = composeShareDm(items, cfg.share.dm.maxChars);
+  const contentHash = contentHashOf(text);
+  const at = localIso(ctx.now());
+
+  const outcome = await deps.writer.sendDm(
+    { receiverId: receiver, text, senderId: input.dmSender ?? 0 },
+    { dryRun: ctx.dryRun },
+  );
+
+  for (const entry of queue) {
+    entry.attempt.status = outcome.ok ? (outcome.dryRun ? 'dry_run' : 'sent') : 'failed';
+    entry.attempt.content = text;
+    entry.attempt.contentHash = contentHash;
+    entry.attempt.key = idempotencyKey({
+      bvid: entry.item.bvid,
+      action: 'dm',
+      target: String(receiver),
+      contentHash,
+    });
+    entry.attempt.plan = outcome.plan;
+    if (!outcome.ok) entry.attempt.error = outcome.error?.message ?? '私信发送失败';
+
+    deps.quota.add({
+      at,
+      type: 'dm',
+      bvid: entry.item.bvid,
+      aid: entry.item.aid,
+      target: String(receiver),
+      share: true,
+      status: outcome.ok ? (outcome.dryRun ? 'dry_run' : 'sent') : 'failed',
+      note: entry.attempt.key,
+      content: text,
+      contentHash,
+      attempts: 1,
+      ...(entry.attempt.error ? { error: entry.attempt.error } : {}),
+      ...(outcome.ok && !outcome.dryRun ? { verifiedAt: at } : {}),
+    });
+  }
+
+  if (!outcome.ok) {
+    report.failed += queue.length;
+    notes.push(`私信分享失败：${outcome.error?.message ?? '未知原因'}`);
+    if (outcome.error?.kind === 'risk') {
+      deps.state.setRiskCooldown(new Date(ctx.now().getTime() + cfg.safety.riskCooldownMin * 60_000).toISOString());
+      report.stopped = 'risk';
+      notes.push(`撞风控，已停止本轮所有写操作并冷却 ${cfg.safety.riskCooldownMin} 分钟`);
+      deps.logger.event('share', '私信分享撞风控，停止写操作', { level: 'warn', target: 'share' });
+    }
+    return;
+  }
+
+  if (outcome.dryRun) {
+    report.dryRun += 1;
+    notes.push(`预演私信分享（合并 ${queue.length} 条视频，未发送）：${text}`);
+  } else {
+    report.sent += 1;
+    deps.feedback?.markShare(ctx.now());
+    notes.push(`私信分享已发（合并 ${queue.length} 条视频）`);
+    deps.logger.event('share', '私信分享已发', { target: 'share', data: { count: queue.length } });
+  }
 }
 
 /** 把执行结果压成报告里的几行（不掺 UI 文案）。 */

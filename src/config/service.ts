@@ -111,7 +111,8 @@ export class ConfigService {
 
     this.config = result.value;
     this.issues = result.issues;
-    this.unknown = result.unknown;
+    // 补丁里没有 _unknown，但之前读到的未知字段要留着（§7.3：不静默丢弃，便于降级/回滚）
+    this.unknown = { ...this.unknown, ...result.unknown };
     try {
       this.save();
     } catch (err) {

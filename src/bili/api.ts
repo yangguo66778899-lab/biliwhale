@@ -206,7 +206,8 @@ export class BiliApi implements WbiProvider {
     if (!this.http.text) {
       return { ok: false, error: { kind: 'internal', code: 'internal', message: 'transport 不支持取文本' } };
     }
-    const res = await this.http.text({ url: subtitleUrl, referer: `${REFERER_VIDEO}${bvid}/` });
+    // 字幕在 CDN 上，不需要 cookie；以前把 SESSDATA/bili_jct 一起发了出去（审计 §3.26）
+    const res = await this.http.text({ url: subtitleUrl, referer: `${REFERER_VIDEO}${bvid}/`, withoutCookie: true });
     if (!res.ok) return res;
     try {
       const parsed = JSON.parse(res.data) as { body?: Array<{ from?: unknown; to?: unknown; content?: unknown }> };

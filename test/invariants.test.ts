@@ -51,8 +51,9 @@ test('子进程只允许出现在「开机自启」这一处，且必须带 wind
   // 注意用 (?<!\.) 排除 RegExp#exec —— 那是正则方法，不是进程
   const pattern = /child_process|spawnSync\s*\(|(?<!\.)\bspawn\s*\(|execFile\s*\(|execSync\s*\(|(?<!\.)\bexec\s*\(/;
   const hits = grep(SOURCE_FILES, pattern);
-  const allowedFile = path.join('lifecycle', 'autostart.ts');
-  const disallowed = hits.filter((hit) => !hit.file.endsWith(allowedFile));
+  // 允许两处：autostart.ts（reg.exe）与 notify/index.ts（command 渠道，§7.11 要求的）
+  const allowedFiles = [path.join('lifecycle', 'autostart.ts'), path.join('notify', 'index.ts')];
+  const disallowed = hits.filter((hit) => !allowedFiles.some((allowedFile) => hit.file.endsWith(allowedFile)));
   assert.deepEqual(disallowed, [], `只有 autostart.ts 可以起子进程（reg.exe）：${JSON.stringify(disallowed)}`);
 
   const text = fs.readFileSync(path.join(SRC, 'lifecycle', 'autostart.ts'), 'utf8');
@@ -124,9 +125,9 @@ test('写调用分散到各自的执行器：评论/收藏/点赞/私信/动态�
 
   const dmWrites = grep(SOURCE_FILES, /\.sendDm\(/);
   assert.deepEqual(
-    dmWrites.filter((hit) => !['dm.ts', 'chat.ts', 'manual.ts'].includes(path.basename(hit.file))),
+    dmWrites.filter((hit) => !['dm.ts', 'chat.ts', 'manual.ts', 'share.ts'].includes(path.basename(hit.file))),
     [],
-    '发私信只许在 dm.ts（发送/通知）、chat.ts（聊天回复）、manual.ts（面板手动）',
+    '发私信只许在 dm.ts（发送/通知）、chat.ts（聊天回复）、manual.ts（面板手动）、share.ts（私信分享，且必须先过闸门）',
   );
 
   const dynamicWrites = grep(SOURCE_FILES, /\.postDynamic\(/);

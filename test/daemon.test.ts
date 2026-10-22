@@ -190,7 +190,7 @@ test('暂停： paused 状态下 tick 不跑，resume 之后恢复', async () =>
   assert.equal(fs.existsSync(paths.runtime), false);
 });
 
-test('配置热更新：改 schedule 会让调度器重算计划', async () => {
+test('配置热更新：改 schedule 会重算，但不会多送一次唤醒（额度已用）', async () => {
   const dir = tmpDir('daemon-reload');
   immediateConfig(dir);
   // 轮询间隔调短：测试只等 900ms（生产默认 5s，见 ConfigWatcher）
@@ -217,8 +217,13 @@ test('配置热更新：改 schedule 会让调度器重算计划', async () => {
     await new Promise((resolve) => setTimeout(resolve, 900));
     await started.tickNow();
 
-    const after = readState(dir).today as { slots: Array<{ atText: string; window: string }> };
-    assert.match(after.slots[0]?.window ?? '', /20:00/, `计划应该按新窗口重算，实际 ${JSON.stringify(after.slots)}`);
+    // 今天已经醒过 1 次、上限也是 1 → 重算后不该再排新槽位（审计 §2.5：
+    // 以前只要改配置就白送一轮，实测一天触发 5 次）
+    const after = readState(dir).today as { slots: Array<{ atText: string; window: string; fired?: boolean }>; wakes?: number };
+    assert.ok(after, 'today 应该还在（重算不能把状态清空）');
+    const pending = after.slots.filter((slot) => !slot.fired);
+    assert.deepEqual(pending, [], `额度已用完，不该排新槽位，实际 ${JSON.stringify(after.slots)}`);
+    assert.equal(after.wakes, 1, '重算不能抹掉今天已经醒过的次数');
   } finally {
     await started.stop();
   }

@@ -214,8 +214,11 @@ export async function sendDmNotify(
     }
   }
 
-  // 2) 公开日记（私人日记永不自动发）
-  if (channel.sendDiary && input.publicDiary && input.publicDiary.trim().length > 0) {
+  // 2) 公开日记（私人日记永不自动发）：要同时满足 diary.push 与 sendDiary（§7.11 / §3.16）
+  const diaryPushOn = deps.config.diary?.push !== false;
+  if (!diaryPushOn) {
+    result.skipped.push('diary.push 关着（不自动推送日记）');
+  } else if (channel.sendDiary && input.publicDiary && input.publicDiary.trim().length > 0) {
     const parts = splitDiary(input.publicDiary);
     if (parts === null) {
       result.skipped.push('公开日记太长（>5 段），只发摘要，全文去面板看');

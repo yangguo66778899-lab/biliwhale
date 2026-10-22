@@ -688,14 +688,21 @@ function findTodayVideo(ctx: AppContext, bvid: string): { bvid: string; title: s
   if (!report.includes(bvid)) return null;
   const lines = report.split('\n');
   const prefix = `#### ${bvid} · `;
-  const head = lines.find((line) => line.startsWith(prefix));
+  const headIndex = lines.findIndex((line) => line.startsWith(prefix));
+  const head = headIndex >= 0 ? lines[headIndex] : undefined;
   const title = head ? head.replace(prefix, '').trim() : bvid;
+  // 只在这个视频自己的小节里找「一句话」：以前从整份报告取第一条，
+  // 面板手动发「视频信息」时附带的「我觉得…」经常是别的视频的理解（审计 §3.5）
   let understanding = '';
-  for (const line of lines) {
-    const one = /^-\s*一句话[:：]\s*(.+)$/.exec(line);
-    if (one) {
-      understanding = one[1] ?? '';
-      break;
+  if (headIndex >= 0) {
+    for (let i = headIndex + 1; i < lines.length; i += 1) {
+      const line = lines[i] ?? '';
+      if (line.startsWith('#### ')) break; // 到下一条视频了
+      const one = /^-\s*一句话[:：]\s*(.+)$/.exec(line);
+      if (one) {
+        understanding = one[1] ?? '';
+        break;
+      }
     }
   }
   const text = [title, `https://www.bilibili.com/video/${bvid}`, understanding ? `我觉得：${understanding}` : '']

@@ -38,7 +38,7 @@ interface Harness {
   config: ConfigService;
 }
 
-function harness(overrides: Record<string, unknown> = {}, opts: { shareEnabled?: boolean; dryRun?: boolean; accountName?: string; maxWrites?: number } = {}): Harness {
+function harness(overrides: Record<string, unknown> = {}, opts: { shareEnabled?: boolean; dryRun?: boolean; accountName?: string; maxWrites?: number; via?: "comment" | "dm" } = {}): Harness {
   const dir = tmpDir('share');
   const paths = resolvePaths({ dataDir: dir });
   const config = { version: 1, ...(overrides as object) };
@@ -50,7 +50,7 @@ function harness(overrides: Record<string, unknown> = {}, opts: { shareEnabled?:
   configService.patch({
     share: {
       enabled: opts.shareEnabled ?? true,
-      via: 'comment',
+      via: opts.via ?? 'comment',
       minScore: 13,
       dailyCap: 3,
       perVideoDays: 7,
@@ -304,15 +304,41 @@ test('每日写操作总上限：超了就不再发', async () => {
   assert.ok(second.attempts[0]?.deny.some((line) => line.includes('上限')), JSON.stringify(second.attempts[0]));
 });
 
-test('私信渠道：M3 明确拒绝（M4 再做）', async () => {
-  const h = harness();
+test('私信渠道：过同一道闸门，合并成一条发出（不再被「M4 再做」拒绝）', async () => {
+  const h = harness({}, { via: 'dm' });
+  const report = await executeShares(h.deps, {
+    items: [
+      { ...ITEM, bvid: 'BV1a0000001', share: { channel: 'dm', text: '私信给你' }, title: '第一条', oneliner: '一句话一' },
+      { ...ITEM, bvid: 'BV1a0000002', share: { channel: 'dm', text: '私信给你' }, title: '第二条', oneliner: '一句话二' },
+    ],
+    todayShares: 0,
+    silenceCap: 3,
+    dryRun: false,
+    dmReceiver: 999,
+    dmSender: 111,
+  });
+  // 一条合并私信 = 1 次发送，两条视频都记在账本里
+  assert.equal(report.sent, 1, JSON.stringify(report.attempts));
+  assert.equal(report.attempts.length, 2);
+  assert.ok(report.attempts.every((attempt) => attempt.status === 'sent'));
+  const dmCalls = h.transport.calls.filter((call) => call.url.includes('send_msg'));
+  assert.equal(dmCalls.length, 1, '两条视频必须合并成一条私信');
+  const entries = h.quota.entries().filter((entry) => entry.type === 'dm');
+  assert.equal(entries.length, 2, '每条视频都要记账（同视频冷却才有依据）');
+  assert.ok(entries.every((entry) => entry.status === 'sent'));
+});
+
+test('私信渠道：主人没配 → 明确拒绝，不发也不记账', async () => {
+  const h = harness({}, { via: 'dm' });
   const report = await executeShares(h.deps, {
     items: [{ ...ITEM, share: { channel: 'dm', text: '私信给你' } }],
     todayShares: 0,
     silenceCap: 3,
     dryRun: false,
+    dmReceiver: 0,
   });
   assert.equal(report.sent, 0);
-  assert.ok(report.attempts[0]?.deny.some((line) => line.includes('M4')), JSON.stringify(report.attempts[0]));
+  assert.ok(report.attempts[0]?.deny.some((line) => line.includes('主人')), JSON.stringify(report.attempts[0]));
   assert.equal(h.transport.calls.length, 0);
+  assert.equal(h.quota.entries().filter((entry) => entry.type === 'dm').length, 0);
 });

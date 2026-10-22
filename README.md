@@ -40,7 +40,8 @@ M5 把它做成能装的东西：便携包自带 Node、免管理员安装/卸�
 [`docs/M4-验收记录.md`](./docs/M4-验收记录.md)、
 [`docs/M5-验收记录.md`](./docs/M5-验收记录.md)，
 使用说明见 [`docs/用户手册.md`](./docs/用户手册.md)，
-实施状态与已知限制见 [`CHANGELOG.md`](./CHANGELOG.md)，模块与不变式见 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)。
+实施状态与已知限制见 [`CHANGELOG.md`](./CHANGELOG.md)，模块与不变式见 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)，
+一次完整代码审计的逐条处理见 [`docs/审计处理记录.md`](./docs/审计处理记录.md)。
 
 ---
 

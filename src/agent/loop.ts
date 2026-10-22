@@ -135,9 +135,13 @@ export async function runAgentLoop(input: LoopInput): Promise<Result<LoopOutcome
       };
     }
 
-    messages.push({ role: 'assistant', content: chat.content || null, tool_calls: chat.toolCalls });
+    // 只保留「余额内」的 tool_calls：协议要求 tool_calls 与 tool 消息一一对应，
+    // 多出来的 call 没有结果，下一跳请求会 400（审计 §3.22）
+    const allowance = Math.max(1, input.limits.maxToolCalls - toolCallsUsed);
+    const calls = chat.toolCalls.slice(0, allowance);
+    messages.push({ role: 'assistant', content: chat.content || null, tool_calls: calls });
 
-    for (const call of chat.toolCalls) {
+    for (const call of calls) {
       if (toolCallsUsed >= input.limits.maxToolCalls) break;
       const name = call.function.name;
       const memoKey = `${name}:${stableArgs(call.function.arguments)}`;

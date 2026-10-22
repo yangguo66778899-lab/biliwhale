@@ -42,7 +42,7 @@ export interface ReportInput {
   counts: RunCounts;
   videos: Map<string, VideoMeta>;
   shareDecisions: Map<string, GateDecision>;
-  /** M3：真正执行后的结果（有就按它渲染，比闸门结论更准）。 */
+  /** 真正执行后的结果（有就按它渲染，比闸门结论更准）。 */
   shareAttempts?: Map<string, ShareAttemptView>;
   usage: { promptTokens: number; completionTokens: number; costCny: number };
   dryRun: boolean;
@@ -158,7 +158,7 @@ export function buildReportSection(input: ReportInput): string {
   lines.push('');
   lines.push(`- 候选 ${counts.candidates} → 初筛 ${counts.screened} → 深读 ${counts.deepRead} → 挑中 ${counts.selected} → 分享 ${counts.shared}`);
   if (counts.skippedNoSubtitle > 0) lines.push(`- 因无字幕跳过 ${counts.skippedNoSubtitle} 条`);
-  // 收藏与动态在 M4 才有写能力：M3 期间**不印刷**，否则等于替模型谎报「已经做了」。
+  // 收藏与动态各自受开关控制：没开就不写进报告，否则等于替模型谎报「已经做了」。
   // （模型有时会在正文里写「我把它收藏了」——只负责报告不跟着撒谎，正文那句靠提示词约束。）
   lines.push('');
 
@@ -195,6 +195,11 @@ function renderShareAttempt(lines: string[], attempt: ShareAttemptView): void {
       break;
     case 'unverified':
       lines.push(`- 分享：已发出${rpidText}，但复核没通过（不自动重发）`);
+      break;
+    case 'held':
+      // 评论确实发出去了，只是 B 站把它挂起了（仅自己可见/审核中）——报告必须这么说，
+      // 否则用户过一会儿在 B 站看到评论，会以为程序在骗他（审计 §3.1）
+      lines.push(`- 分享：评论已发出${rpidText}，但被 B 站挂起了（公开区看不到，主人可能收不到 @ 通知；不自动重发）`);
       break;
     case 'dry_run':
       lines.push('- 分享：预演（没真的发）');
@@ -253,7 +258,7 @@ export function writeArchive(
   return file;
 }
 
-/** 通知文件出口（M0 只有这个渠道；其它渠道 M4/M5 再接）。 */
+/** 通知文件出口（默认渠道；其它渠道见 notify/index.ts）。 */
 export function appendNotifyLog(paths: Paths, text: string, at: Date = new Date()): string {
   ensureDir(path.dirname(paths.notifyLog));
   appendText(paths.notifyLog, `[${formatHhmm(at.getHours() * 60 + at.getMinutes())}] ${text.trim()}\n`);

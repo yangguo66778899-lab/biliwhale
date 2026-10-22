@@ -39,6 +39,8 @@ export interface ChatDeps {
   state: AppStateStore;
   chat: ChatStore;
   secrets: SecretsService;
+  /** 反馈账本：主人来信 = 用户表态，用来驱动沉默衰减（审计 §2.4）。 */
+  feedback?: { markUserSignal: (at?: Date) => void };
   now?: () => Date;
 }
 
@@ -177,6 +179,8 @@ export async function handleOwnerMessage(deps: ChatDeps, message: DmMessage): Pr
   if (message.senderId === deps.secrets.selfMid()) return { replied: false, skipped: '这是登录账号自己的消息，不是主人' };
   if (message.senderId !== owner) return { replied: false, skipped: '不是主人，不回' };
   if (!message.text.trim()) return { replied: false, skipped: '空消息' };
+  // 主人真的来信了 = 用户表态，沉默衰减从这里恢复（§10.4）
+  deps.feedback?.markUserSignal(now());
   if (message.msgKey && deps.chat.repliedKeys().has(message.msgKey)) return { replied: false, skipped: '这条已经回过了' };
   if (deps.chat.sentInLastHour(now()) >= cfg.listen.dm.maxPerHour) return { replied: false, skipped: `一小时内已经回了 ${cfg.listen.dm.maxPerHour} 条` };
   if (deps.state.inRiskCooldown(now())) return { replied: false, skipped: '风控冷却中' };
@@ -230,6 +234,8 @@ export async function handleOwnerMessage(deps: ChatDeps, message: DmMessage): Pr
     return { replied: false, skipped: sent.error?.message ?? '发送失败' };
   }
 
+  // 预演不记聊天、也不记 msgKey：否则关掉预演后这条消息再也不会被回（审计 §3.13）
+  if (!dryRun) {
   deps.chat.append({
     at: localIso(now()),
     from: 'self',
@@ -237,6 +243,7 @@ export async function handleOwnerMessage(deps: ChatDeps, message: DmMessage): Pr
     ...(message.msgKey ? { msgKey: message.msgKey } : {}),
     ...(attachments[0] ? { attach: { kind: attachments[0].kind, ...(attachments[0].bvid ? { bvid: attachments[0].bvid } : {}) } } : {}),
   });
+  }
 
   // 附件：日记 / 视频信息（都用今天已有的内容，不再请求网络）
   for (const attachment of attachments) {

@@ -83,11 +83,14 @@ export class ListenLoop {
             state: this.ctx.state,
             pending: this.ctx.pending,
             secrets: this.ctx.secrets,
+            feedback: this.ctx.feedback,
             now: this.now,
             draft: makeReplyDraft(this.ctx.llm, this.logger),
           });
           result.comment = watch;
-          this.commentIdle = watch.created > 0 || (watch.seen > 0 && !watch.baseline) ? 0 : this.commentIdle + 1;
+          // seen 只说明「消息中心里有历史消息」，不代表有新东西。
+          // 以前用它判断，导致 commentIdle 永远是 0、空闲退避（300→600→900，上限 15 分钟）从不生效（审计 §3.30）
+          this.commentIdle = watch.created > 0 || watch.baseline ? 0 : this.commentIdle + 1;
           if (watch.created > 0) {
             this.logger.event('listen', `评论监听：新增 ${watch.created} 条待审`, {
               target: 'listen',
@@ -130,6 +133,7 @@ export class ListenLoop {
             state: this.ctx.state,
             chat: this.ctx.chat,
             secrets: this.ctx.secrets,
+            feedback: this.ctx.feedback,
             now: this.now,
           });
           result.dm = dm;

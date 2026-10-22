@@ -50,6 +50,11 @@ export interface GenerateInput {
   rand: RandomSource;
   /** 上一天剩下的、还没触发的槽位（跨零点的尾巴）。 */
   carryOver?: PlannedSlot[];
+  /**
+   * 今天**已经醒过**几次（重算计划时要扣掉）。
+   * 审计 §2.5：不扣就会「每改一次配置 / 每暂停恢复一次，就白送一轮」，实测一天 5 次。
+   */
+  wakesAlready?: number;
 }
 
 /** 每次醒来之间至少隔这么久（分钟）。 */
@@ -95,9 +100,13 @@ export function generateDayPlan(input: GenerateInput): DayPlan | null {
   const baseMs = dayStartMs(input.now);
   const date = localDate(input.now);
   const carry = (input.carryOver ?? []).filter((slot) => !slot.fired && !slot.missed);
+  // 今天已经醒过几次，就把额度扣掉多少（硬上限不因重算而重置）
+  const wakesAlready = Math.max(0, Math.floor(input.wakesAlready ?? 0));
+  const cap = input.maxWakesPerDay <= 0 ? 0 : Math.min(input.maxWakesPerDay, HARD_WAKE_CAP);
+  const remainingCap = Math.max(0, cap - wakesAlready);
 
-  // 掷「今天不想看」
-  if (input.rand.float() < input.skipChance) {
+  // 掷「今天不想看」——但额度用完就不再排任何槽位（否则 skip 会绕过硬上限，审计 §3.29）
+  if (remainingCap > 0 && input.rand.float() < input.skipChance) {
     const window = usable[0] as ScheduleWindow;
     const { from, to } = windowRange(window);
     const at = randomMinute(from, to, input.rand);
@@ -110,13 +119,22 @@ export function generateDayPlan(input: GenerateInput): DayPlan | null {
     };
   }
 
-  const cap = input.maxWakesPerDay <= 0 ? 0 : Math.min(input.maxWakesPerDay, HARD_WAKE_CAP);
   if (cap === 0) {
     return { date, action: 'wake', targetWakes: 0, reason: '每天唤醒次数设为 0：只能手动跑', slots: [...carry] };
   }
+  if (remainingCap === 0) {
+    return {
+      date,
+      action: 'wake',
+      targetWakes: wakesAlready,
+      reason: `今天已经醒过 ${wakesAlready} 次（上限 ${cap}），不再自动醒`,
+      slots: [...carry],
+    };
+  }
 
   const slots: PlannedSlot[] = [...carry];
-  let remaining = cap - carry.length;
+  // 已醒次数 + 跨零点带过来的槽位，都要从额度里扣
+  let remaining = Math.max(0, remainingCap - carry.length);
 
   for (const window of usable) {
     for (let i = 0; i < window.wakes && remaining > 0; i += 1) {

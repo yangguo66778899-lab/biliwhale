@@ -49,7 +49,7 @@ export interface AppContext {
   feedback: FeedbackLedger;
   runs: RunStore;
   api: BiliApi;
-  /** 写能力（M3：评论/楼中楼/删自己的评论）。 */
+  /** 写能力（评论/楼中楼/删自己的评论/收藏/点赞/私信/动态）。 */
   writer: BiliWriter;
   /** 待审回复草稿。 */
   pending: PendingStore;

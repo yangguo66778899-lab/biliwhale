@@ -1,5 +1,5 @@
 /**
- * B 站写能力（M3：评论/楼中楼/删自己的评论；M4：收藏/点赞/私信/动态）。
+ * B 站写能力：评论/楼中楼/删自己的评论、收藏、点赞、私信、动态。
  *
  * 职责：把写请求的**形状**与**执行**分开：
  *   - `planXxx()` 是纯函数：给出 method/path/form（cookie 与 csrf 打码），
@@ -122,6 +122,8 @@ const DM_INTERVAL_MS = 1_000;
 export class BiliWriter {
   private readonly deps: WriterDeps;
   private lastWriteAt = 0;
+  /** 写请求串行队列：并发调用也按间隔排队（审计 §2.9）。 */
+  private writeChain: Promise<void> = Promise.resolve();
 
   constructor(deps: WriterDeps) {
     this.deps = deps;
@@ -392,15 +394,28 @@ export class BiliWriter {
     return { ok: true, data: res.data.data };
   }
 
-  /** 写间隔：默认 5s + 0–1s 抖动（私信 1s）；测试可以跳过。 */
-  private async throttle(intervalMs?: number): Promise<void> {
-    if (this.deps.skipThrottle) return;
-    const now = this.deps.now?.() ?? Date.now();
-    const interval = intervalMs ?? this.deps.minIntervalMs ?? WRITE_INTERVAL_MS;
-    const wait = this.lastWriteAt === 0 ? 0 : Math.max(0, this.lastWriteAt + interval - now);
-    const jitter = wait > 0 ? 0 : Math.floor(Math.random() * Math.min(1000, interval));
-    if (wait + jitter > 0) await sleep(wait + jitter);
-    this.lastWriteAt = this.deps.now?.() ?? Date.now();
+  /**
+   * 写间隔：默认 5s + 0–1s 抖动（私信 1s）；测试可以跳过。
+   *
+   * 两条硬要求（审计 §2.9）：
+   *   1. **必须串行**：两个并发调用不能都判定「可以立刻发」（监听 + 定时轮重叠时会百毫秒连发）；
+   *   2. **抖动叠加在间隔上**：连续写恰好 5000ms 是最像机器的节奏，反而更容易被风控。
+   */
+  private throttle(intervalMs?: number): Promise<void> {
+    if (this.deps.skipThrottle) return Promise.resolve();
+    const run = this.writeChain.then(async () => {
+      const now = this.deps.now?.() ?? Date.now();
+      const interval = intervalMs ?? this.deps.minIntervalMs ?? WRITE_INTERVAL_MS;
+      const wait = this.lastWriteAt === 0 ? 0 : Math.max(0, this.lastWriteAt + interval - now);
+      const jitter = wait > 0 ? Math.floor(Math.random() * Math.min(1000, interval)) : 0;
+      if (wait + jitter > 0) await sleep(wait + jitter);
+      this.lastWriteAt = this.deps.now?.() ?? Date.now();
+    });
+    this.writeChain = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
   }
 }
 

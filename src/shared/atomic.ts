@@ -11,14 +11,26 @@ import path from 'node:path';
 
 export type ReadResult<T> =
   | { ok: true; value: T; from: 'main' | 'backup' }
-  | { ok: false; error: string; corrupt: boolean };
+  | { ok: false; error: string; corrupt: boolean; reason?: 'missing' | 'corrupt' | 'unreadable' };
 
 export function ensureDir(dir: string): void {
   fs.mkdirSync(dir, { recursive: true });
 }
 
-/** 读 JSON；主文件坏了退回 `.bak`；两者都坏则报告 corrupt。 */
+/**
+ * 读 JSON；主文件坏了退回 `.bak`；两者都坏则报告 corrupt。
+ *
+ * 三种失败必须分清（审计 §2.15 / §3.33）：
+ *   - missing：主文件与 .bak 都不存在（真·首次启动）；
+ *   - corrupt：文件在、但 JSON 解析不了（最常见：记事本存成带 BOM）；
+ *   - unreadable：文件在、但读失败（EPERM/EBUSY，杀软/同步盘占用）。
+ * 以前「corrupt 且没有 .bak」会被错报成「文件不存在」，于是配置被当成首次启动**静默重置**。
+ */
 export function readJson<T>(file: string): ReadResult<T> {
+  // 主文件存在但坏了，而 .bak 也不存在时，最终要报 corrupt 而不是 missing
+  let sawCorrupt = false;
+  let sawUnreadable: string | null = null;
+
   for (const candidate of [file, `${file}.bak`] as const) {
     let raw: string;
     try {
@@ -26,18 +38,25 @@ export function readJson<T>(file: string): ReadResult<T> {
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === 'ENOENT') continue;
-      return { ok: false, error: `读取失败（${candidate}）：${String(err)}`, corrupt: false };
+      sawUnreadable = `读取失败（${candidate}）：${String(err)}`;
+      break;
     }
     try {
-      return { ok: true, value: JSON.parse(raw) as T, from: candidate === file ? 'main' : 'backup' };
-    } catch (err) {
-      // fall through to backup; if this was the backup too, we already tried both
-      if (candidate === `${file}.bak`) {
-        return { ok: false, error: `JSON 损坏（${candidate}）：${String(err)}`, corrupt: true };
-      }
+      // 记事本另存会带 BOM：先剥掉再 parse，别让「存一下」就把配置判成损坏（审计 §2.15）
+      const text = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
+      return { ok: true, value: JSON.parse(text) as T, from: candidate === file ? 'main' : 'backup' };
+    } catch {
+      sawCorrupt = true;
     }
   }
-  return { ok: false, error: '文件不存在', corrupt: false };
+
+  if (sawUnreadable) {
+    return { ok: false, error: sawUnreadable, corrupt: false, reason: 'unreadable' };
+  }
+  if (sawCorrupt) {
+    return { ok: false, error: `JSON 损坏（${file}）：主文件与 .bak 都解析不了`, corrupt: true, reason: 'corrupt' };
+  }
+  return { ok: false, error: '文件不存在', corrupt: false, reason: 'missing' };
 }
 
 /** 原子写 JSON：temp + fsync + 旧文件转 .bak + rename。 */

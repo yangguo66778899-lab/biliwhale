@@ -32,3 +32,8 @@ tmp/
 .idea/
 Thumbs.db
 desktop.ini
+
+# 审计复现脚本（临时）
+.audit/
+# 开发脚本的隔离数据目录
+.run/

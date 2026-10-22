@@ -3,7 +3,7 @@
  * 命令行入口。
  *
  * 命令：
- *   run --now [--dry] [--fixtures]   跑一轮（M0/M1 只读，不写任何远端内容）
+ *   run --now [--dry] [--fixtures]   跑一轮（默认按配置决定真发/预演；--dry 强制预演）
  *   serve                            守护进程：作息 + 本地控制接口（托盘靠它）
  *   doctor                           体检：目录/配置/凭据/网络/模型/自启/ffmpeg
  *   config show|validate             看配置 / 校验配置
@@ -53,9 +53,11 @@ interface ParsedArgs {
   /** restore：从哪个 zip 恢复。 */
   from?: string;
   yes: boolean;
+  /** 认不出的参数/命令（有就报错退出，别猜）。 */
+  unknown: string[];
 }
 
-const VERSION = '0.7.0-M5';
+const VERSION = '0.7.1';
 
 function parseArgs(argv: string[]): ParsedArgs {
   const args: ParsedArgs = {
@@ -70,6 +72,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     dataOnly: false,
     list: false,
     yes: false,
+    unknown: [],
   };
   const positional: string[] = [];
 
@@ -130,7 +133,11 @@ function parseArgs(argv: string[]): ParsedArgs {
         args.command = 'help';
         break;
       default:
-        if (arg.startsWith('--')) break;
+        // 认不出的参数要报错：以前静默忽略，用户以为参数生效了（需求 §13 / 审计 §3.18）
+        if (arg.startsWith('--')) {
+          args.unknown.push(arg);
+          break;
+        }
         positional.push(arg);
     }
   }
@@ -148,7 +155,11 @@ function parseArgs(argv: string[]): ParsedArgs {
   else if (cmd === 'config') {
     args.command = 'config';
     args.sub = sub;
-  } else if (cmd) args.command = 'run';
+  } else if (cmd) {
+    // 打错的命令不许当成 run：以前 `node src/cli.ts rn` 会真跑一整轮（审计 §3.18）
+    args.command = 'help';
+    args.unknown.push(cmd);
+  }
   if (sub === 'list') args.list = true;
   if (sub && args.command === 'config') args.sub = sub;
   return args;
@@ -204,7 +215,9 @@ async function commandRun(args: ParsedArgs): Promise<number> {
   };
 
   ctx.logger.info('cli', `开跑：trigger=${args.trigger}${args.fixtures ? ' fixtures' : ''}（命令行一律预演；真发在面板/定时）`);
-  const record = await runRound(deps, { trigger: args.trigger, dryRun: true });
+  // §3.17：命令行也要能真发（与面板/定时同一套 pipeline），--dry 才是「只预演」；
+  // 真正是否发仍由 safety.dryRun / 各开关决定（在 runRound 里统一算）。
+  const record = await runRound(deps, { trigger: args.trigger, dryRun: args.dry });
 
   const seconds = Math.round((Date.now() - started) / 1000);
   const lines = [
@@ -450,6 +463,10 @@ function help(): string {  return [
 
 async function main(): Promise<number> {
   const args = parseArgs(process.argv.slice(2));
+  if (args.unknown.length > 0) {
+    process.stderr.write(`认不出的参数或命令：${args.unknown.join(' ')}\n跑 "node src/cli.ts --help" 看用法。\n`);
+    return 2;
+  }
   switch (args.command) {
     case 'run':
       return commandRun(args);

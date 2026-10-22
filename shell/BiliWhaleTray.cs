@@ -61,6 +61,9 @@ namespace BiliWhaleTray
         private static string runtimeDirOverride;
         private static RuntimeInfo runtime;
         private static HealthInfo health;
+        // 写操作要 CSRF（内核对 POST/PUT/DELETE 强制），启动时或 403 后重新取（审计 §2.13）
+        private static string csrfToken;
+        private static bool kernelStartTried;
 
         [STAThread]
         private static void Main(string[] args)
@@ -78,12 +81,51 @@ namespace BiliWhaleTray
             }
 
             RefreshHealth();
+            if (autostartMode && !KernelUp()) AutoStartKernel();
             pollTimer = new System.Windows.Forms.Timer();
             pollTimer.Interval = PollMs;
             pollTimer.Tick += delegate { RefreshHealth(); };
             pollTimer.Start();
 
             Application.Run();
+        }
+
+        private static bool KernelUp()
+        {
+            string body;
+            return TryRequest("GET", "/api/health", null, out body);
+        }
+
+        /**
+         * 开机自启时把内核拉起来（审计 §2.12：以前只起托盘，重启电脑后到点不会醒）。
+         * 每 15 秒的轮询里重试，最多 5 次；托盘菜单里的「启动内核」仍然可用。
+         */
+        private static void AutoStartKernel()
+        {
+            if (kernelStartTried) return;
+            kernelStartTried = true;
+            System.Windows.Forms.Timer retry = new System.Windows.Forms.Timer();
+            int attempts = 0;
+            retry.Interval = 5000;
+            retry.Tick += delegate
+            {
+                attempts++;
+                if (KernelUp())
+                {
+                    retry.Stop();
+                    retry.Dispose();
+                    RefreshHealth();
+                    return;
+                }
+                StartKernel();
+                if (attempts >= 5)
+                {
+                    retry.Stop();
+                    retry.Dispose();
+                }
+            };
+            retry.Start();
+            StartKernel();
         }
 
         private static void ParseArgs(string[] args)
@@ -369,8 +411,20 @@ namespace BiliWhaleTray
 
         private static bool TryRequest(string method, string path, string payload, out string body)
         {
+            return TryRequestInner(method, path, payload, out body, true);
+        }
+
+        private static bool TryRequestInner(string method, string path, string payload, out string body, bool retry)
+        {
             body = null;
             if (runtime == null || runtime.Port <= 0 || string.IsNullOrEmpty(runtime.Token)) return false;
+
+            bool write = method != "GET" && method != "HEAD";
+            if (write)
+            {
+                string csrf = EnsureCsrf();
+                if (csrf == null) return false;
+            }
 
             string url = "http://127.0.0.1:" + runtime.Port + path;
             HttpWebRequest request = (HttpWebRequest)WebRequest.Create(url);
@@ -379,6 +433,7 @@ namespace BiliWhaleTray
             request.ReadWriteTimeout = 5000;
             request.Headers.Add("Authorization", "Bearer " + runtime.Token);
             request.UserAgent = "BiliWhaleTray";
+            if (write) request.Headers.Add("x-csrf-token", csrfToken);
 
             try
             {
@@ -400,14 +455,48 @@ namespace BiliWhaleTray
                     return true;
                 }
             }
-            catch (WebException)
+            catch (WebException ex)
             {
+                // 403 多半是 CSRF 过期（内核重启过）：清掉缓存重试一次
+                HttpWebResponse failed = ex.Response as HttpWebResponse;
+                if (retry && write && failed != null && (int)failed.StatusCode == 403)
+                {
+                    csrfToken = null;
+                    return TryRequestInner(method, path, payload, out body, false);
+                }
                 return false;
             }
             catch (Exception)
             {
                 return false;
             }
+        }
+
+        /** 取（并缓存）CSRF token：GET /api/session 允许只带 Bearer。 */
+        private static string EnsureCsrf()
+        {
+            if (!string.IsNullOrEmpty(csrfToken)) return csrfToken;
+            string body;
+            if (!TryRequestInner("GET", "/api/session", null, out body, true)) return null;
+            string token = ExtractJsonString(body, "csrfToken");
+            if (string.IsNullOrEmpty(token)) return null;
+            csrfToken = token;
+            return csrfToken;
+        }
+
+        /** 极简 JSON 取值（托盘只处理自家接口的几个字段，不引 JSON 库）。 */
+        private static string ExtractJsonString(string json, string key)
+        {
+            if (string.IsNullOrEmpty(json)) return null;
+            int keyIndex = json.IndexOf("\"" + key + "\"");
+            if (keyIndex < 0) return null;
+            int colon = json.IndexOf(':', keyIndex);
+            if (colon < 0) return null;
+            int quote1 = json.IndexOf('"', colon + 1);
+            if (quote1 < 0) return null;
+            int quote2 = json.IndexOf('"', quote1 + 1);
+            if (quote2 < 0) return null;
+            return json.Substring(quote1 + 1, quote2 - quote1 - 1);
         }
 
         private static void TryStart(string target)

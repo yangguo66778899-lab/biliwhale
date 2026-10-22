@@ -1,4 +1,4 @@
-@echo off
+﻿@echo off
 rem BiliWhale 便携版启动器：本目录就是程序，数据在 %APPDATA%\BiliWhale
 setlocal
 set "HERE=%~dp0"
@@ -12,7 +12,8 @@ if not exist "%HERE%app\src\cli.ts" (
   pause
   exit /b 1
 )
-set "BILIWHALE_KERNEL_CMD=%HERE%runtime\node.exe %HERE%app\src\cli.ts serve"
+rem 路径可能有空格（C:\Users\John Smith\…），命令里两个路径都要加引号（审计 §3.41）
+set "BILIWHALE_KERNEL_CMD="%HERE%runtime\node.exe" "%HERE%app\src\cli.ts" serve"
 if exist "%HERE%app\shell\BiliWhaleTray.exe" (
   start "" "%HERE%app\shell\BiliWhaleTray.exe" %*
   exit /b 0

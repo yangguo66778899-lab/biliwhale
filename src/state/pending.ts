@@ -11,6 +11,7 @@
 import type { Logger } from '../shared/logger.ts';
 import type { PendingReply } from '../shared/types.ts';
 import { JsonStore } from './store.ts';
+import { localIso } from '../shared/time.ts';
 
 export interface PendingFile {
   version: number;
@@ -92,7 +93,7 @@ export class PendingStore {
 
   /** 过期处理：返回本次过期的条数。 */
   expire(now: Date = new Date()): number {
-    const nowIso = now.toISOString();
+    const nowIso = localIso(now);
     let expired = 0;
     this.store.update((current) => {
       let changed = false;
@@ -120,5 +121,5 @@ export function newPendingId(now: Date = new Date()): string {
 
 /** 过期时间 = 现在 + 7 天。 */
 export function expiresAt(now: Date = new Date(), days = PENDING_TTL_DAYS): string {
-  return new Date(now.getTime() + days * 86_400_000).toISOString();
+  return localIso(new Date(now.getTime() + days * 86_400_000));
 }

@@ -76,6 +76,7 @@ export type Infer<S> = S extends { kind: 'enum'; values: readonly (infer V)[] }
             : never;
 
 export type Config = Infer<typeof SPEC>;
+export type NotifyChannel = Config['notify']['channels'][number];
 
 /* ---------- 规格本体 ---------- */
 
@@ -439,7 +440,6 @@ export const SPEC = {
           desc: '可同时开多个；全部失败时仍会兜底写一份到 logs/notify.log',
           maxItems: 8,
           default: [
-            { type: 'desktop', enabled: true, path: '', url: '', format: 'generic', template: 'text', cmd: '', args: '', sendSummary: true, sendDiary: true, sendVideoInfo: true },
             { type: 'file', enabled: true, path: '', url: '', format: 'generic', template: 'text', cmd: '', args: '', sendSummary: true, sendDiary: false, sendVideoInfo: false },
           ],
           item: {
@@ -449,7 +449,8 @@ export const SPEC = {
               type: {
                 kind: 'enum',
                 label: '类型',
-                values: ['desktop', 'file', 'webhook', 'command', 'dm'] as const,
+                values: ['file', 'webhook', 'command', 'dm'] as const,
+                desc: '桌面 Toast 需要托盘配合，暂不支持（用 webhook/command 可自己弹）',
                 default: 'file',
               },
               enabled: { kind: 'boolean', label: '启用', default: false },
@@ -471,18 +472,13 @@ export const SPEC = {
           },
         },
         quietHours: {
-          kind: 'array',
+          kind: 'object',
           label: '静默时段',
-          desc: '静默时只写文件，不弹窗',
-          maxItems: 4,
-          default: [],
-          item: {
-            kind: 'object',
-            label: '时段',
-            fields: {
-              start: { kind: 'string', label: '开始', default: '23:00', pattern: HHMM, patternMessage: '格式 HH:mm' },
-              end: { kind: 'string', label: '结束', default: '08:00', pattern: HHMM, patternMessage: '格式 HH:mm' },
-            },
+          desc: '这段时间只写文件，不发 webhook/命令/私信（可以跨零点，例如 23:00–08:00）',
+          fields: {
+            enabled: { kind: 'boolean', label: '启用静默时段', default: false },
+            start: { kind: 'string', label: '开始', default: '23:00', pattern: HHMM, patternMessage: '格式 HH:mm' },
+            end: { kind: 'string', label: '结束', default: '08:00', pattern: HHMM, patternMessage: '格式 HH:mm' },
           },
         },
       },

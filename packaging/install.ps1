@@ -21,6 +21,16 @@ param(
   [string]$Target = ""
 )
 
+# install.cmd 直接透传 %*：把 --desktop / --autostart 这种 GNU 风格也认下来
+foreach ($extra in $args) {
+  switch -Regex ($extra) {
+    '^--?desktop$' { $Desktop = $true }
+    '^--?autostart$' { $Autostart = $true }
+    '^--?no-?launch$' { $NoLaunch = $true }
+    '^--?no-?register$' { $NoRegister = $true }
+  }
+}
+
 $ErrorActionPreference = "Stop"
 $source = Split-Path -Parent $PSCommandPath
 $appName = "BiliWhale"
@@ -48,9 +58,12 @@ try {
     $rt = Get-Content $runtimeFile -Raw | ConvertFrom-Json
     if ($rt.port -and $rt.token) {
       try {
-        Invoke-RestMethod -Method Post -Uri ("http://127.0.0.1:" + $rt.port + "/api/shutdown") -Headers @{ authorization = "Bearer " + $rt.token } -TimeoutSec 3 | Out-Null
+        # 写操作要 CSRF：先 GET /api/session 拿 token（审计 §2.13，以前这里永远 403）
+        $session = Invoke-RestMethod -Method Get -Uri ("http://127.0.0.1:" + $rt.port + "/api/session") -Headers @{ authorization = "Bearer " + $rt.token } -TimeoutSec 3
+        $headers = @{ authorization = "Bearer " + $rt.token; "x-csrf-token" = $session.csrfToken }
+        Invoke-RestMethod -Method Post -Uri ("http://127.0.0.1:" + $rt.port + "/api/shutdown") -Headers $headers -TimeoutSec 5 | Out-Null
         Write-Step "已请正在运行的内核退出（数据已落盘）"
-        Start-Sleep -Seconds 1
+        Start-Sleep -Seconds 2
       } catch {
         Write-Step "内核没在跑（或已退出）"
       }

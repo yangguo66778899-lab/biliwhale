@@ -230,10 +230,16 @@ function rowsToSvg(rows, moduleSize = 5, margin = 3) {
 
 /* ---------------- 概览 ---------------- */
 
-async function renderOverview() {
+async function renderOverview(options = {}) {
   const panel = $('#panel-overview');
   panel.innerHTML = '<h1>概览</h1><div class="card">读取中…</div>';
-  const [status, doctor] = await Promise.all([api('/api/status'), api('/api/doctor').catch(() => null)]);
+  // doctor 会外呼 B 站 nav + DeepSeek /models + spawn reg：只在切到本页时跑，轮询不跑（审计 §3.36）
+  const wantDoctor = options.doctor !== false;
+  const [status, doctor] = await Promise.all([
+    api('/api/status'),
+    wantDoctor ? api('/api/doctor').catch(() => null) : Promise.resolve(state.doctor ?? null),
+  ]);
+  if (wantDoctor) state.doctor = doctor;
   state.status = status;
 
   const paused = status.scheduler.paused;
@@ -1336,7 +1342,7 @@ async function boot() {
   setInterval(() => {
     const active = document.querySelector('.panel.active');
     if (active && active.id === 'panel-overview' && !document.querySelector('#panel-overview input:focus')) {
-      renderOverview().catch(() => undefined);
+      renderOverview({ doctor: false }).catch(() => undefined);
     }
   }, 5000);
 }

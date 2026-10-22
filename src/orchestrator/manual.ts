@@ -1,7 +1,7 @@
 /**
  * 手动写操作（面板上人点的那几个）：
  *   - 删自己在某个视频下的评论（M3）
- *   - 手动发一条私信（M4：测试消息 / 今天的公开日记 / 今天上下文里的视频信息）
+ *   - 手动发一条私信（测试消息 / 今天的公开日记 / 今天上下文里的视频信息）
  *
  * 职责：保证手动写和自动写受**同一套**开关与风控约束（总写开关 / 急停 / 预演 / 风控冷却），
  *   并且做防呆：只删自己的（rpid 来自账本）、只发今天出现过的 BV、私信 ≤500。
@@ -14,6 +14,7 @@ import type { QuotaLedger } from '../state/ledgers.ts';
 import type { AppStateStore } from '../state/appState.ts';
 import type { BiliWriter } from '../bili/write.ts';
 import { resolveOwner } from '../account/owner.ts';
+import { splitDiary } from './dm.ts';
 
 export interface ManualDeleteDeps {
   logger: Logger;
@@ -73,6 +74,9 @@ export async function sendManualDm(
   const cfg = deps.config;
   if (!cfg.safety.writeEnabled) return { ok: false, message: '总写开关关着' };
   if (cfg.safety.killSwitch) return { ok: false, message: '急停开着' };
+  // 撞完风控的冷却期内不写（审计 §3.3：其它执行器都查了，只有这里漏了）
+  const nowAt = deps.now?.() ?? new Date();
+  if (deps.state.inRiskCooldown(nowAt)) return { ok: false, message: '撞风控后的冷却期内，先不发（等冷却结束）' };
 
   const owner = resolveOwner(cfg, deps.secrets.selfMid());
   if (!owner.ok) return { ok: false, message: owner.problem ?? '主人还没配置' };
@@ -81,7 +85,35 @@ export async function sendManualDm(
   let text = input.text?.trim() ?? '';
   if (input.kind === 'diary') {
     if (!input.diary) return { ok: false, message: '今天还没有公开日记' };
-    text = input.diary.slice(0, 480);
+    // 按 §7.11 分段（≤500 字、最多 5 段），不再硬截 480 —— 那会把日记切成半截还切坏 emoji
+    const parts = splitDiary(input.diary, cfg.listen.dm.maxChars, 5);
+    if (parts === null) {
+      const head = Array.from(input.diary).slice(0, cfg.listen.dm.maxChars - 20).join('');
+      text = `${head}\n（日记太长，只发开头；全文在面板看）`;
+    } else if (parts.length > 1) {
+      let sent = 0;
+      for (const part of parts) {
+        const outcome = await deps.writer.sendDm(
+          { receiverId: receiver, text: part, senderId: deps.secrets.selfMid() },
+          { dryRun: cfg.safety.dryRun },
+        );
+        if (!outcome.ok) {
+          return { ok: false, message: `第 ${sent + 1} 段发送失败：${outcome.error?.message ?? '未知原因'}` };
+        }
+        sent += 1;
+      }
+      if (!cfg.safety.dryRun) {
+        deps.chat.append({
+          at: nowAt.toISOString(),
+          from: 'self',
+          text: `（今天的公开日记，分 ${parts.length} 段发送）`,
+          manual: true,
+        });
+      }
+      return { ok: true, message: `已发今天的公开日记（分 ${parts.length} 段，每段 ≤${cfg.listen.dm.maxChars} 字）` };
+    } else {
+      text = parts[0] ?? '';
+    }
   } else if (input.kind === 'video_info') {
     if (!input.bvid) return { ok: false, message: '缺少 bvid' };
     if (!input.videoText) return { ok: false, message: `${input.bvid} 不在今天的上下文里（只发今天出现过的视频）` };

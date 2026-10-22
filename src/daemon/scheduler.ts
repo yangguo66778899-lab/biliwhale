@@ -13,7 +13,8 @@ import type { AppContext } from '../bootstrap.ts';
 import type { RoundRunner } from './runner.ts';
 import { cryptoRandom } from '../scheduler/random.ts';
 import type { RandomSource } from '../scheduler/random.ts';
-import { tick } from '../scheduler/tick.ts';
+import { markSlot, tick } from '../scheduler/tick.ts';
+import { HARD_WAKE_CAP } from '../scheduler/plan.ts';
 import type { TickScheduleConfig } from '../scheduler/tick.ts';
 import type { DayPlan } from '../scheduler/plan.ts';
 import type { TodayPlan } from '../state/appState.ts';
@@ -93,6 +94,7 @@ export class Scheduler {
       ...baseInput,
       plan: state.today ? toDayPlan(state.today) : null,
       invalidate: this.invalidateNext,
+      wakesAlready: state.today?.wakes ?? 0,
     });
     this.invalidateNext = false;
 
@@ -114,6 +116,14 @@ export class Scheduler {
       }
 
       case 'fire': {
+        // 兜底：计划里可能还有旧槽位，但今天已经醒满 3 次就绝不再跑（§2.5 硬约束）
+        if ((state.today?.wakes ?? 0) >= HARD_WAKE_CAP) {
+          this.ctx.state.savePlanSlots(outcome.plan.date, markSlot(outcome.plan, outcome.slot, 'missed').slots);
+          this.ctx.logger.event('wake-skipped', `今天已醒 ${state.today?.wakes} 次（上限 ${HARD_WAKE_CAP}），到点也不再跑`, {
+            target: 'scheduler',
+          });
+          break;
+        }
         this.ctx.state.savePlanSlots(outcome.plan.date, outcome.plan.slots);
         this.ctx.state.noteWake(localIso(now), minuteOfDay(now));
         this.ctx.logger.info('scheduler', `到点：${outcome.slot.atText}（${outcome.slot.window}）`);

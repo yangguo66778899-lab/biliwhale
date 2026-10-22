@@ -2,7 +2,7 @@
  * 一轮的编排（Phase 0–10）。
  *
  * 职责：决定每个相位做什么、预算多少、失败怎么降级；所有落盘与记账由这里做。
- *   M0 的边界：**只读**。代码里没有任何写 B 站的通道，即使 share 开关打开，
+ *   边界：**模型只读**。模型没有写通道，是否真写由 orchestrator 的闸门与执行器决定；
  *   也只会走闸门并在报告里写「本该发什么」。真正的执行是 M3。
  * 不做什么：不实现 B 站接口细节（bili 层）、不组装 prompt（prompts/prompts.ts）、不打分（模型）。
  */
@@ -46,11 +46,12 @@ import { executeShares, summarizeShares } from './share.ts';
 import { resolveOwner } from '../account/owner.ts';
 import type { ShareAttempt } from './share.ts';
 import { autoApproveOwnerDrafts, scanStrangerReplies } from './pending.ts';
-import { sendShareDm, sendDmNotify } from './dm.ts';
+import { sendDmNotify } from './dm.ts';
 import { executeFavorites } from './fav.ts';
 import { likeVideo } from './like.ts';
 import { buildDeepPrompt, buildScreenPrompt, clip, pickDeepReads } from './prompts.ts';
 import { appendNotifyLog, writeArchive, writeDiary, writeReport, videoUrl, skipReasonText } from './writers.ts';
+import { dispatchNotifications } from '../notify/index.ts';
 import { buildSystemMessage, buildUserPreamble, loadPromptAssets } from '../agent/prompts.ts';
 import type { PromptStatus } from '../agent/prompts.ts';
 import { extractJson as extractJsonFromModule, fallbackRoundResult, validateRoundResult, validateScreenResult } from '../agent/output.ts';
@@ -105,12 +106,17 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
   const cfg = deps.config.get();
   // 「这一轮到底是不是预演」只算一次：手动预演（--dry / 面板「预演一轮」）或配置里的「一律预演」，
   // 两者任一为真就不真发。**提示词、报告、run 记录都必须用这同一个值**——
-  // 曾经这里写死过 true（M0 遗留），结果真跑时报告也标「预演，未真的发」，模型还被提示按预演写文案。
+  // 以前这里写死过 true，结果真跑时报告也标「预演，未真的发」，模型还被提示按预演写文案。
   const effectiveDryRun = options.dryRun || cfg.safety.dryRun;
   const phases: PhaseRecord[] = [];
   const errors: string[] = [];
   const notes: string[] = [];
   const usage: Usage = { promptTokens: 0, completionTokens: 0, cachedTokens: 0 };
+  /** 本轮还剩多少 token（§12.3 / 审计 §3.25）：四处循环共用这一个数。 */
+  const remainingBudget = (): number => {
+    const spent = usage.promptTokens + usage.completionTokens;
+    return Math.max(1_000, cfg.llm.runBudgetTokens - spent);
+  };
 
   let record = deps.runs.start({
     trigger: options.trigger,
@@ -208,7 +214,7 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
       notes.push('磁盘空间没查成（不影响运行）');
     }
     if (cfg.safety.killSwitch) problems.push('急停开着（safety.killSwitch=true）');
-    notes.push('M0 不抽帧：视频画面这一路还没接（media.frames 先不生效）');
+    notes.push('不抽帧：模型是纯文本的，画面进不了提示词（配置里也不再提供这个开关）');
 
     if (problems.length > 0) {
       for (const problem of problems) errors.push(`预检失败：${problem}`);
@@ -243,6 +249,13 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
     budget: `本轮 ${cfg.llm.runBudgetTokens} token`,
     dryRun: effectiveDryRun,
   };
+  // 沉默太久时问一句「在忙吗」——只问一次（§10.3），问过就记账
+  if (silence.askOnce && !deps.feedback.get().askedOnce) {
+    notes.push('想问你一句：最近还在看这些吗？要是忙就先不看，我照常记日记（只问这一次）');
+    deps.feedback.markAsked();
+    deps.logger.event('silence', '沉默衰减：已问一次「在忙吗」', { target: 'round' });
+  }
+
   const memoryLines = buildMemoryLines(deps, silence.text);
   const systemMessage = buildSystemMessage(assets);
   const preamble = buildUserPreamble({ status, config: cfg, assets, memoryLines });
@@ -328,7 +341,7 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
       system: systemMessage,
       user: screenUser,
       runtime,
-      limits: { maxSteps: Math.min(cfg.llm.maxSteps, 8), maxToolCalls: Math.min(cfg.llm.maxToolCalls, 10), remainingTokens: cfg.llm.runBudgetTokens },
+      limits: { maxSteps: Math.min(cfg.llm.maxSteps, 8), maxToolCalls: Math.min(cfg.llm.maxToolCalls, 10), remainingTokens: remainingBudget() },
       logger,
       jsonMode: true,
     });
@@ -348,7 +361,7 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
           system: systemMessage,
           user: `${screenUser}\n\n# 上一次输出不合规\n程序拒绝了你上一次的输出：${parsed.error.message}\n请严格按格式重新输出 JSON，不要任何多余文字。`,
           runtime,
-          limits: { maxSteps: 4, maxToolCalls: 4, remainingTokens: cfg.llm.runBudgetTokens },
+          limits: { maxSteps: 4, maxToolCalls: 4, remainingTokens: remainingBudget() },
           logger,
           jsonMode: true,
         });
@@ -432,7 +445,7 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
     system: systemMessage,
     user: deepUser,
     runtime,
-    limits: { maxSteps: cfg.llm.maxSteps, maxToolCalls: cfg.llm.maxToolCalls, remainingTokens: cfg.llm.runBudgetTokens },
+    limits: { maxSteps: cfg.llm.maxSteps, maxToolCalls: cfg.llm.maxToolCalls, remainingTokens: remainingBudget() },
     logger,
   });
 
@@ -451,7 +464,7 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
         system: systemMessage,
         user: `${deepUser}\n\n# 上一次输出不合规\n程序拒绝了你上一次的输出：${parsed.error.message}\n请严格按格式重新输出 JSON。`,
         runtime,
-        limits: { maxSteps: Math.min(cfg.llm.maxSteps, 6), maxToolCalls: 4, remainingTokens: cfg.llm.runBudgetTokens },
+        limits: { maxSteps: Math.min(cfg.llm.maxSteps, 6), maxToolCalls: 4, remainingTokens: remainingBudget() },
         logger,
       });
       if (repaired.ok) {
@@ -498,6 +511,9 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
     });
   }
 
+  // 视频元信息（标题/UP/时长/链接）：私信分享与视频通知都要用，必须在使用前构建
+  const videos = buildVideoMeta(collected.candidates, deepReads);
+
   // ---------------------------------------------------------------- 闸门 + 执行分享（M3）
   // 判定与执行是同一段：闸门说「不发」就一条都不发；说「发」才走写层。
   const shareReport = await executeShares(
@@ -508,6 +524,7 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
       writer: deps.writer,
       api: deps.api,
       config: cfg,
+      feedback: deps.feedback,
       selfMid: () => deps.secrets.selfMid(),
       now,
       ...(deps.shareVerifyDelaysMs ? { verifyDelaysMs: deps.shareVerifyDelaysMs } : {}),
@@ -520,10 +537,14 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
         score: item.score,
         share: item.share,
         inDeepRead: ctxForResult.deepReadBvids.has(item.bvid),
+        title: videos.get(item.bvid)?.title ?? item.bvid,
+        oneliner: item.oneliner,
       })),
       todayShares,
       silenceCap: silence.shareCap,
       dryRun: effectiveDryRun,
+      dmReceiver: resolveOwner(cfg, deps.secrets.selfMid()).mid,
+      dmSender: deps.secrets.selfMid(),
     },
   );
   counts.shared = shareReport.sent;
@@ -544,44 +565,6 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
     }
   }
   if (shareReport.stopped === 'risk') errors.push('撞风控：本轮已停写，冷却期内不再发');
-
-  // ---------------------------------------------------------------- 私信分享（M4：share.via=dm）
-  // 与评论分享走同一道闸门，但**合并成一条**发出一轮挑中的视频；占分享额度。
-  if (cfg.share.enabled && cfg.share.via === 'dm') {
-    try {
-      const dmItems = result.selected.map((item) => {
-        const meta = videos.get(item.bvid);
-        return {
-          bvid: item.bvid,
-          title: meta?.title ?? item.bvid,
-          desc: '',
-          understanding: item.oneliner || item.why,
-        };
-      });
-      const dm = await sendShareDm(
-        { logger, config: cfg, writer: deps.writer, state: deps.state, secrets: deps.secrets, now },
-        { items: dmItems, dryRun: effectiveDryRun },
-      );
-      if (dm.ok) {
-        counts.shared += dm.dryRun ? 0 : dm.sent;
-        deps.quota.add({
-          at: localIso(now()),
-          type: 'dm',
-          bvid: dmItems[0]?.bvid ?? '',
-          target: String(resolveOwner(cfg, deps.secrets.selfMid()).mid || 'owner'),
-          share: true,
-          status: dm.dryRun ? 'dry_run' : 'sent',
-          content: dm.texts[0] ?? '',
-          ...(dm.dryRun ? {} : { verifiedAt: localIso(now()) }),
-        });
-        notes.push(dm.dryRun ? '预演私信分享（未发送）' : `私信分享已发（合并 ${dmItems.length} 条视频）`);
-      } else {
-        notes.push(`私信分享没发：${dm.error ?? (dm.skipped.join('；') || '未知原因')}`);
-      }
-    } catch (err) {
-      notes.push(`私信分享出错（不影响本轮）：${humanError(err)}`);
-    }
-  }
 
   // ---------------------------------------------------------------- 收藏（M4，默认开）
   if (cfg.fav.enabled && result.favorite) {
@@ -658,7 +641,6 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
 
   // ---------------------------------------------------------------- Phase 8 落盘
   const phase8 = Date.now();
-  const videos = buildVideoMeta(collected.candidates, deepReads);
   const reportPath = writeReport(deps.paths, {
     date,
     roundLabel: roundLabel(startedAt),
@@ -747,9 +729,20 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
   // ---------------------------------------------------------------- Phase 9 通知
   const phase9 = Date.now();
   try {
-    const notifyPath = appendNotifyLog(deps.paths, result.notify);
-    logger.info('notify', `通知已写入 ${notifyPath}`);
-    markPhase('notify', Date.now() - phase9, 'ok', 'file');
+    const notified = await dispatchNotifications(
+      {
+        config: cfg,
+        logger,
+        writeFile: (text) => {
+          appendNotifyLog(deps.paths, text);
+        },
+      },
+      { text: result.notify, at: now() },
+    );
+    for (const item of notified.failed) notes.push(`通知渠道 ${item.channel} 失败：${item.error}`);
+    for (const item of notified.skipped) notes.push(`通知：${item}`);
+    if (notified.quiet) notes.push('静默时段：只写了文件');
+    markPhase('notify', Date.now() - phase9, notified.failed.length > 0 ? 'degraded' : 'ok', notified.delivered.join('/') || 'none');
   } catch (err) {
     errors.push(`通知写入失败：${humanError(err)}`);
     markPhase('notify', Date.now() - phase9, 'failed');

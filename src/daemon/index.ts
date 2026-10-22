@@ -28,7 +28,8 @@ import { ListenLoop } from './listen.ts';
 import { ConfigWatcher } from './configWatch.ts';
 import { LoginService } from '../account/login.ts';
 import { summarizePlan, pendingSlots } from '../scheduler/tick.ts';
-import { localIso } from '../shared/time.ts';
+import { localDate, localIso } from '../shared/time.ts';
+import { pruneData } from '../state/prune.ts';
 import { humanError } from '../shared/errors.ts';
 import type { RandomSource } from '../scheduler/random.ts';
 
@@ -74,7 +75,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonStart> {
   const { logger, paths } = ctx;
 
   // ---- 单实例 ----
-  const lock = new InstanceLock(path.join(paths.localDir, 'instance.lock'));
+  // 心跳文件参与「是否陈旧」的判断：跑满 24 小时也不会被当成死进程（§2.10）
+  const lock = new InstanceLock(path.join(paths.localDir, 'instance.lock'), { heartbeatFile: paths.heartbeat });
   const acquired = lock.acquire({ version: opts.version });
   if (!acquired.acquired) {
     logger.warn('daemon', acquired.reason);
@@ -153,17 +155,29 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonStart> {
   };
 
   const heartbeat = (): void => {
-    const state = ctx.state.get();
-    writeHeartbeat(paths, {
-      pid: process.pid,
-      at: localIso(),
-      uptimeSec: Math.round((Date.now() - startedAt) / 1000),
-      version: opts.version,
-      running: runner.isRunning(),
-      paused: state.paused,
-      nextWakeAt: isoOfNextWake(),
-      lastRunStatus: state.lastRunStatus,
-    });
+    try {
+      const state = ctx.state.get();
+      const today = localDate(opts.now ? opts.now() : new Date());
+      if (today !== pruneDay) {
+        pruneDay = today;
+        pruneOnce();
+      }
+      writeHeartbeat(paths, {
+        pid: process.pid,
+        at: localIso(),
+        uptimeSec: Math.round((Date.now() - startedAt) / 1000),
+        version: opts.version,
+        running: runner.isRunning(),
+        paused: state.paused,
+        nextWakeAt: isoOfNextWake(),
+        lastRunStatus: state.lastRunStatus,
+      });
+    } catch (err) {
+      // 磁盘满、杀软占用、同步盘短暂锁文件……都会让 rename 抛 EPERM/EBUSY。
+      // 心跳失败不是致命错误：记一条事件，下一个 tick 再试。
+      logger.warn('daemon', `心跳写入失败（会重试）：${humanError(err)}`);
+      logger.event('heartbeat-error', `心跳写入失败：${humanError(err)}`, { level: 'warn', target: 'daemon' });
+    }
   };
 
   // ---- 配置热更新：schedule 变了就重算，其它字段下一次调用生效 ----
@@ -203,6 +217,23 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonStart> {
   configWatcher.start();
 
   ctx.chat.prune(); // 聊天记录保留 30 天
+  // 数据保留期（§7.7）：启动时清一次，之后每天第一次心跳再清
+  let pruneDay = '';
+  const pruneOnce = (): void => {
+    try {
+      pruneData({
+        paths,
+        config: ctx.config.get(),
+        logger,
+        seen: ctx.seen,
+        quota: ctx.quota,
+        runs: ctx.runs,
+        ...(opts.now ? { now: opts.now } : {}),
+      });
+    } catch (err) {
+      logger.warn('prune', `保留期清理失败（不影响主流程）：${humanError(err)}`);
+    }
+  };
   // 主人昵称没填时按 UID 补一次（后台跑，失败就留着让用户手填；夹具模式跳过）
   void fillOwnerName(ctx).catch((err) => logger.warn('account', `主人昵称自动补全失败：${humanError(err)}`));
   const listen = new ListenLoop({ ctx, ...(opts.now ? { now: opts.now } : {}) });
@@ -210,9 +241,17 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonStart> {
   if (!opts.fixtures) listen.start();
 
   const tickTimer = setInterval(() => {
-    void scheduler.tickOnce();
+    void scheduler.tickOnce().catch((err: unknown) => {
+      logger.error('daemon', `调度 tick 未捕获异常：${humanError(err)}`);
+    });
   }, tickMs);
-  const heartbeatTimer = setInterval(heartbeat, heartbeatMs);
+  const heartbeatTimer = setInterval(() => {
+    try {
+      heartbeat();
+    } catch (err) {
+      logger.error('daemon', `心跳回调未捕获异常：${humanError(err)}`);
+    }
+  }, heartbeatMs);
 
   let stopping: Promise<void> | null = null;
 

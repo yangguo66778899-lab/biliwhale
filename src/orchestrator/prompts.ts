@@ -108,10 +108,19 @@ export function buildDeepPrompt(input: {
    **发不发由代码的闸门决定**，你只负责写文案；拿不准也先写出来。`
     : '分享开关是**关着**的：所有 `share.channel` 都写 `"none"`、`text` 留空，只写报告和日记。';
 
-  // M3 只有「评论」这一种写能力：收藏/动态/点赞/私信都还没接。
-  // 提示词必须说清楚，否则模型会在正文里写「我把它收藏了」——那是谎报（真机报告里出现过）。
-  const notBuiltYet =
-    '收藏 / 动态 / 点赞 / 私信这几种写能力**还没有接上**：相应字段一律写 null，并且**不要**在正文、日记、通知里说自己收藏了、点赞了、转发了、私信了。';
+  // 写能力的开关状态必须如实写进提示词：模型只能按这里说的写，代码才有机会执行。
+  // 以前这里写的是「收藏/动态/点赞/私信都还没接，一律写 null」——那是 M3 的事实；
+  // M4 代码全接上了却没改提示词，结果默认开着的收藏一次都不会发生（审计 §2.2）。
+  const favNote = input.config.fav.enabled
+    ? `收藏开关是**开着**的（每天最多 ${input.config.fav.dailyCap} 条、同视频 ${input.config.fav.perVideoDays} 天一次）。
+   值得留的就写 \`favorite: { "bvid": "BV…", "reason": "为什么留" }\`：\`reason\` 至少 6 个字，
+   说清「以后还想再看 / 它说清了哪件事 / 我想跟着做」；同类已经收过 2 条以上时，要说明它比那些好在哪。
+   不值得留就写 \`null\`。除了这条 bvid，不要写别的视频。`
+    : '收藏开关是**关着**的：`favorite` 写 `null`，也不要在正文/日记里说自己收藏了。';
+
+  const dynamicNote = input.config.dynamic.enabled
+    ? '动态**不在这一轮里发**（它只能从面板手动发、且要二次确认）：`dynamic` 一律写 `null`。'
+    : '动态开关是**关着**的：`dynamic` 写 `null`。';
 
   return [
     '# 深读材料',
@@ -120,10 +129,10 @@ export function buildDeepPrompt(input: {
     '# 本轮任务',
     '',
     '1. 对上面每条写 `why`（两三句，具体：哪句话/哪个点让你觉得值得）和 `oneliner`（一句话，给分享用）。',
-    `2. 决定分享哪一条：最多一条，只从上面这些里挑，分数要 ≥ ${input.config.share.minScore}/20；决定不发就写 \`"channel":"none"\`。`,
+    `2. 决定分享哪一条：最多一条，只从上面这些里挑，分数要 ≥ ${input.config.share.minScore}/20；决定发就写 \`"channel":"${input.config.share.via}"\`，不发就写 \`"channel":"none"\`。`,
     `   ${shareNote}`,
-    `3. 收藏：写 null。${notBuiltYet}`,
-    '4. 动态：写 null。',
+    `3. 收藏：${favNote}`,
+    `4. ${dynamicNote}`,
     '5. 写两本日记：',
     `   - \`diary.public\`（给用户看的）：散文体，可以对「你」说话，必须有具体细节（哪句话、第几分钟、评论区谁说了什么）。**不要写成汇报**。`,
     '   - `diary.private`（给自己看的）：不加滤镜，必须含「偏好校准」：哪条视频、用户什么反应、下次往哪偏。',
@@ -139,7 +148,7 @@ export function buildDeepPrompt(input: {
       {
         selected: [{ bvid: 'BV...', score: 15, why: '两三句', oneliner: '一句话', share: { channel: 'none', text: '', reason: '' } }],
         skipped: [{ bvid: 'BV...', reason: 'low_score', note: '' }],
-        favorite: null,
+        favorite: input.config.fav.enabled ? { bvid: 'BV...', reason: '为什么留（至少 6 个字）' } : null,
         dynamic: null,
         diary: { public: '...', private: '...' },
         report_md: '这一轮翻了几条…（2–4 段，写给用户看）',
@@ -150,6 +159,7 @@ export function buildDeepPrompt(input: {
       2,
     ),
     '```',
+    '- `favorite` 要么是 `null`，要么是 `{ bvid, reason }`，且 bvid 必须是本轮深读过的；代码还会二次判断（理由长度、同类说明、每日额度、同视频冷却）。',
     '- `skipped.reason` 只能取：no_subtitle / low_score / duplicate / irrelevant / tool_error / too_old / other。',
     '- 没有进深读的候选也要出现在 `skipped` 里（用初筛理由）。',
   ]
