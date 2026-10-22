@@ -26,8 +26,8 @@ export class RunStore {
   }
 
   /** 开始一轮：先落盘（事务日志），跑挂了也知道这一轮存在过。 */
-  start(input: { trigger: RunTrigger; dryRun: boolean; configuredModel: string }): RunRecord {
-    const now = new Date();
+  start(input: { trigger: RunTrigger; dryRun: boolean; configuredModel: string; now?: Date }): RunRecord {
+    const now = input.now ?? new Date();
     const record: RunRecord = {
       id: this.uniqueId(now),
       trigger: input.trigger,

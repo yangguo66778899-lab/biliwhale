@@ -19,6 +19,8 @@ import { humanError } from '../shared/errors.ts';
 import { localIso } from '../shared/time.ts';
 
 export interface RunnerOptions {
+  /** 注入时钟（浸泡测试用；不注入就用真实时间）。 */
+  now?: () => Date;
   fixtures: boolean;
   mockModel: boolean;
 }
@@ -72,6 +74,7 @@ export class RoundRunner {
       runs: this.ctx.runs,
       configuredModel: this.ctx.configuredModel,
       ...(this.opts.fixtures || this.opts.mockModel ? { noCredentialsNeeded: true } : {}),
+      ...(this.opts.now ? { now: this.opts.now } : {}),
       ...(modeNote ? { modeNote } : {}),
     };
   }

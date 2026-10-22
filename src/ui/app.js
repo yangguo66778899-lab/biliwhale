@@ -1203,6 +1203,18 @@ async function renderAbout() {
   );
   panel.appendChild(
     el('div', { class: 'card' }, [
+      el('h3', {}, ['更新与备份']),
+      el('div', { class: 'hint', text: '检查更新只看一眼有没有新版（不自动下载、不自动安装）；备份会把数据打成一个 zip。' }),
+      el('div', { class: 'actions' }, [
+        el('button', { onClick: () => checkUpdateUi() }, ['检查更新']),
+        el('button', { onClick: () => backupNow() }, ['备份数据']),
+      ]),
+      el('div', { id: 'about-update', class: 'hint', text: '' }),
+      el('div', { id: 'about-backup', class: 'hint', text: '' }),
+    ]),
+  );
+  panel.appendChild(
+    el('div', { class: 'card' }, [
       el('h3', {}, ['快速操作']),
       el('div', { class: 'actions' }, [
         el('button', { onClick: downloadDiag }, ['下载诊断包']),
@@ -1210,6 +1222,42 @@ async function renderAbout() {
       ]),
     ]),
   );
+}
+
+async function checkUpdateUi() {
+  const box = $('#about-update');
+  if (box) box.textContent = '检查中…';
+  try {
+    const res = await api('/api/update/check');
+    const info = res.result || {};
+    if (info.error) {
+      if (box) box.textContent = info.error;
+      toast(info.error, true);
+      return;
+    }
+    const text = info.hasUpdate
+      ? `当前 ${info.current} → 最新 ${info.latest}${info.url ? `（下载：${info.url}）` : ''}${info.notes ? ` · ${info.notes}` : ''}`
+      : `已是最新（${info.current}${info.latest ? `，远端 ${info.latest}` : ''}）`;
+    if (box) box.textContent = text;
+    toast(info.hasUpdate ? '有新版本，看下面的地址' : '已是最新');
+  } catch (err) {
+    if (box) box.textContent = String(err.message || err);
+    toast(String(err.message || err), true);
+  }
+}
+
+async function backupNow() {
+  const box = $('#about-backup');
+  if (box) box.textContent = '备份中…';
+  try {
+    const res = await api('/api/backup', { method: 'POST' });
+    const text = res.ok ? `${res.message} → ${res.file}` : res.message;
+    if (box) box.textContent = text;
+    toast(res.ok ? '备份完成' : res.message, !res.ok);
+  } catch (err) {
+    if (box) box.textContent = String(err.message || err);
+    toast(String(err.message || err), true);
+  }
 }
 
 async function shutdownKernel() {

@@ -73,6 +73,28 @@ orchestrator/round.ts  ── 一轮的相位机（唯一写文件、唯一记�
 依赖方向是单向的：`ui → http → daemon → orchestrator → agent → llm/bili → state/shared`。
 反向依赖（比如 bili 层 import orchestrator）属破坏性改动，不要做。
 
+## 打包、备份、升级（M5）
+
+```
+scripts/pack.mts ──> src/pack/plan.ts（清单，纯函数，可测）──> dist/BiliWhale-<版本>/
+                     ├── app/（src + fixtures + shell/BiliWhaleTray.exe + 文档）
+                     ├── runtime/node.exe（随包带 Node）
+                     ├── BiliWhale.cmd / install.cmd / install.ps1 / uninstall.* / README.txt / VERSION
+                     └── → dist/BiliWhale-<版本>-portable.zip（deflate）
+
+src/backup.ts ──> src/shared/zip.ts（store/deflate + CRC32 + zip-slip 校验）
+                  ├── backup：固定文件 + reports/diaries/archive/runs/chat，带 manifest.json
+                  └── restore：白名单校验 → JSON parse → 原子写（保留 .bak）
+
+src/config/migrate.ts ──> ConfigService.load()（启动时跑一次，迁移后写回）
+src/update.ts         ──> /api/update/check、CLI update（只比较主.次.修，只提示不下载）
+src/daemon/configWatch.ts ──> fs.watch + mtime 轮询（5s 兜底）+ 单层 debounce（500ms）
+```
+
+**升级流程**（写进用户手册 §6）：备份 → 退出内核 → 覆盖 pp/ 与 untime/ → 启动（自动迁移配置）→ 需要回滚就装回旧 pp/ + estore 备份。
+**为什么不打安装器 exe**：Inno Setup 要引入构建期工具链；「便携包 + 脚本安装」同样免管理员、可卸载、能自启，
+packaging/ 里加一份 .iss 随时能补上，不影响内核。
+
 ## 本地接口（M2 全量）
 
 | 方法 | 路径 | 用途 |
@@ -180,6 +202,14 @@ Phase 10 收尾     token 记账 / run 记录 / 事件    → state.noteRun + ad
 34. **主人 ≠ 登录账号**：`account.mid/name` 是登录账号（鲸鲸自己，发送方身份），`account.ownerMid/ownerName` 是主人（另一个号，必填）。
     所有「@ 谁 / 私信发给谁 / 聊天只认谁 / 主人直发」都走 `src/account/owner.ts` 的 `resolveOwner()`，**不许回退到登录账号**；
     缺主人或填成登录账号 → 明确拒绝并给出可读原因（真机上「@ 是空的、私信发给自己、聊天不回主人」就是这么来的）。
+35. **迁移只补形状、不动数据**：`config/migrate.ts` 的每一步都是纯函数、幂等、只往前走；迁移失败保留原配置并报错，
+    **不许回落默认值**（会把用户的窗口/开关全冲掉）。比程序新的配置原样保留并提示（可能是装回了旧版）。
+36. **备份只认白名单**：`backup.ts` 写备份时挑固定文件与目录，恢复时逐条校验路径（拒绝 `..`、绝对路径、程序文件），
+    JSON 先 parse 再原子写；凭据默认**不进备份**（要带就显式 `--with-secrets`）。
+37. **打包产物是「能跑的一整套」**：`scripts/pack.mts` 只复制清单里的东西（`src/pack/plan.ts`），随包带 `runtime/node.exe`；
+    包里不出现 `test/`、`node_modules/`、`dist/`、`.git/`；安装脚本只写 HKCU 与 `%LOCALAPPDATA%`，不需要管理员。
+38. **配置热更新不能只靠 fs.watch**：`daemon/configWatch.ts` 用 watch（立刻）+ mtime 轮询（最多 5 秒兜底）双保险，
+    debounce 只有这一层（别再套 `setTimeout`，否则改完要等 1 秒才生效——浸泡测试踩过）。
 
 ## 想加东西时改哪里
 

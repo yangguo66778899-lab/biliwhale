@@ -89,7 +89,8 @@ export function resolvePaths(overrides: { dataDir?: string; localDir?: string } 
     promptsDir,
     logsDir,
     cacheDir,
-    backupDir: path.join(localDir, 'backup'),
+    // 按 §8.1：备份放在数据目录里（跟数据在一起，用户拷走就是一整套）
+    backupDir: path.join(dataDir, 'backup'),
     chatDir: path.join(dataDir, 'chat'),
     pendingDir: path.join(dataDir, 'pending'),
     heartbeat: path.join(localDir, 'heartbeat.json'),

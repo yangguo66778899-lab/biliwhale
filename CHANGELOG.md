@@ -2,6 +2,53 @@
 
 版本号与需求文档的 `config.version` 分开：这里记程序版本，配置迁移另算。
 
+## 0.7.0-M5 — 2026-10-22
+
+**M5 = 打包 + 打磨**：便携包（自带 Node）、免管理员安装/卸载、备份/恢复、配置 schema 迁移、检查更新、
+性能基准、7 天无人值守浸泡、用户手册。
+判据（§15）：**干净 Windows 机器 5 分钟装好；7 天无人值守。**
+
+### 新增
+
+- **打包（`scripts/pack.mts`，`npm run pack`）**：产出 `dist/BiliWhale-<版本>/`（116 个文件、89.1 MB）与
+  `dist/BiliWhale-<版本>-portable.zip`（34.2 MB，deflate），2.5 秒完成。随包带 `runtime/node.exe`
+  （§7.14 许可的「随包带 node.exe」路线，不做 SEA/bundle）。
+- **自己写的 zip（`src/shared/zip.ts`）**：store + deflate、UTF-8 文件名、CRC32、zip-slip 校验，零依赖。
+  备份用 store（读起来简单），便携包用 deflate（体积 1/3）。
+- **安装/卸载（`packaging/`）**：`install.cmd` 装到 `%LOCALAPPDATA%\Programs\BiliWhale`，
+  写用户环境变量 `BILIWHALE_KERNEL_CMD`、建开始菜单快捷方式、`-Autostart` 写 HKCU Run、`-Desktop` 加桌面图标；
+  `uninstall.cmd` 默认**保留数据**（`--remove-data` 才删）。全程不需要管理员。
+- **备份 / 恢复 / 列表（`src/backup.ts` + CLI）**：
+  `backup [--with-secrets] [--data-only] [--out <zip>]`、`backup list --from <zip>`、`restore --from <zip> --yes`。
+  白名单恢复（只认配置/账本/报告/日记/聊天）、坏 JSON 剔除、同秒备份不覆盖、恢复走原子写。
+- **配置 schema 迁移（`src/config/migrate.ts`）**：`CURRENT_CONFIG_VERSION = 2`；v1→v2 补 `ownerMid/ownerName`
+  与 `app.updateUrl`，并提醒填主人 UID。启动时自动迁移并写回（保留 `.bak`）。
+- **检查更新（`src/update.ts`）**：`app.updateUrl` → 取 JSON → 只按「主.次.修」比较（`0.7.0-M5` 与 `0.7.0` 同版），
+  只提示不下载。面板「关于」页 + `/api/update/check` + `npm run update:check`。
+- **面板「关于」页**：加「检查更新」「备份数据」两个按钮与结果回显；`/api/backup` 走同一套备份逻辑。
+- **性能基准（`npm run bench`）**：冷启动 14.8ms、API P95 17.4ms、空闲 RSS 77MB、20 轮后 +0.1MB，全部达标。
+- **7 天浸泡（`npm run soak`）**：加速时钟 336 次 tick，每天 3 醒 3 轮、报告/两本日记齐全、0 错误；
+  期间改配置会重算、暂停不跑、恢复接着跑。
+- **用户手册（`docs/用户手册.md`）**：装/首次配置/九个页面/开关含义/备份升级回滚/排障。
+- **测试 276 → 301**：zip+备份 10、迁移+更新 8、打包 7。
+
+### 修掉的问题（M5 期间发现）
+
+- **配置改坏会静默回落默认值**：热更新前先 `validateOnly`，不合法就保留当前配置并报错（以前会把窗口/开关冲成默认）。
+- **热更新要等 1 秒**：daemon 里一层 500ms `setTimeout` + ConfigWatcher 一层 debounce，叠成了 1 秒；
+  现在单层 debounce，并加 **5 秒 mtime 轮询兜底**（`fs.watch` 漏事件时也能生效）——浸泡测试就是这个坑踩出来的。
+- **便携 zip 打不出来**：`BiliWhale-x/` 与相对路径拼出双斜杠，被 zip-slip 校验拦下（校验本身是对的）。
+- **`dist/` 被编码不变式扫到**：构建产物不参与源码约定，已排除。
+- **`backup list` 会顺手在默认数据目录建配置**：改成纯只读，不碰数据目录。
+- **CLI 还写着「M0 只读」**：改成「命令行一律预演；真发在面板/定时」。
+
+### 刻意没做
+
+- **Inno Setup 安装器 exe**：要引入构建期工具链；现在是「便携包 + 脚本安装」，同样免管理员可卸载。
+- **自动更新**：只做检查+提示（§7.14 首版）。
+- **代码签名**：没有证书，Windows 可能提示未知发布者。
+- **崩溃自愈 / 计划任务兜底**：M6。
+
 ## 0.6.1-M4 — 2026-10-22
 
 **「复核未通过」其实是 B 站把评论挂起了：复核改成三态（公开可见 / 已发出但被挂起 / 查不到）。**

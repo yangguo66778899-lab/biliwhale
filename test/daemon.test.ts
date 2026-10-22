@@ -193,7 +193,8 @@ test('暂停： paused 状态下 tick 不跑，resume 之后恢复', async () =>
 test('配置热更新：改 schedule 会让调度器重算计划', async () => {
   const dir = tmpDir('daemon-reload');
   immediateConfig(dir);
-  const started = await startDaemon({ dataDir: dir, port: 0, fixtures: true, version: 'test', tickMs: 3600_000, heartbeatMs: 3600_000 });
+  // 轮询间隔调短：测试只等 900ms（生产默认 5s，见 ConfigWatcher）
+  const started = await startDaemon({ dataDir: dir, port: 0, fixtures: true, version: 'test', tickMs: 3600_000, heartbeatMs: 3600_000, configPollMs: 150 });
   assert.equal(started.kind, 'started');
   if (started.kind !== 'started') return;
 

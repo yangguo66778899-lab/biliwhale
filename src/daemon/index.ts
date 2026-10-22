@@ -25,6 +25,7 @@ import { RoundRunner } from './runner.ts';
 import { Scheduler, toDayPlan } from './scheduler.ts';
 import { createHandlers } from './api.ts';
 import { ListenLoop } from './listen.ts';
+import { ConfigWatcher } from './configWatch.ts';
 import { LoginService } from '../account/login.ts';
 import { summarizePlan, pendingSlots } from '../scheduler/tick.ts';
 import { localIso } from '../shared/time.ts';
@@ -39,6 +40,8 @@ export interface DaemonOptions {
   version: string;
   tickMs?: number;
   heartbeatMs?: number;
+  /** config 轮询间隔（测试用；默认 5000ms）。 */
+  configPollMs?: number;
   /** 测试注入：随机源与时钟（生产用 crypto / 系统时间）。 */
   rand?: RandomSource;
   now?: () => Date;
@@ -79,7 +82,11 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonStart> {
   }
 
   const startedAt = Date.now();
-  const runner = new RoundRunner(ctx, { fixtures: opts.fixtures ?? false, mockModel: opts.mockModel ?? false });
+  const runner = new RoundRunner(ctx, {
+    fixtures: opts.fixtures ?? false,
+    mockModel: opts.mockModel ?? false,
+    ...(opts.now ? { now: opts.now } : {}),
+  });
   const scheduler = new Scheduler(ctx, runner, {
     ...(opts.rand ? { rand: opts.rand } : {}),
     ...(opts.now ? { now: opts.now } : {}),
@@ -160,33 +167,40 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonStart> {
   };
 
   // ---- 配置热更新：schedule 变了就重算，其它字段下一次调用生效 ----
-  let watchTimer: NodeJS.Timeout | null = null;
+  // 注意：debounce 由 ConfigWatcher 负责（500ms），这里不要再套一层 setTimeout，否则改完配置要等 1 秒才生效。
   const onConfigChanged = (): void => {
-    if (watchTimer) clearTimeout(watchTimer);
-    watchTimer = setTimeout(() => {
-      try {
-        const before = JSON.stringify(ctx.config.get().schedule);
-        ctx.config.load();
-        const after = JSON.stringify(ctx.config.get().schedule);
-        logger.setLevel(ctx.config.get().logging.level);
-        if (before !== after) {
-          scheduler.invalidate();
-          logger.info('daemon', '检测到 schedule 变化，已让调度器重算');
-        } else {
-          logger.info('daemon', '配置已重新加载');
-        }
-      } catch (err) {
-        logger.warn('daemon', `配置重载失败（继续用旧配置）：${humanError(err)}`);
+    try {
+      // 先校验：改坏了就保留当前配置（回落默认值会把用户的窗口/开关全冲掉）
+      const raw = JSON.parse(fs.readFileSync(paths.config, 'utf8')) as unknown;
+      const check = ctx.config.validateOnly(raw);
+      if (!check.ok) {
+        const first = check.issues.find((issue) => issue.severity === 'error');
+        logger.error('daemon', `配置改坏了（${first?.path ?? '?'}：${first?.message ?? '未知'}），继续用当前配置`);
+        return;
       }
-    }, 500);
+      const before = JSON.stringify(ctx.config.get().schedule);
+      ctx.config.load();
+      const after = JSON.stringify(ctx.config.get().schedule);
+      logger.setLevel(ctx.config.get().logging.level);
+      if (before !== after) {
+        scheduler.invalidate();
+        logger.info('daemon', '检测到 schedule 变化，已让调度器重算');
+      } else {
+        logger.info('daemon', '配置已重新加载');
+      }
+    } catch (err) {
+      logger.warn('daemon', `配置重载失败（继续用旧配置）：${humanError(err)}`);
+    }
   };
 
-  let watcher: fs.FSWatcher | null = null;
-  try {
-    watcher = fs.watch(paths.config, { persistent: false }, () => onConfigChanged());
-  } catch (err) {
-    logger.warn('daemon', `配置文件监听没装成（改配置需要重启）：${humanError(err)}`);
-  }
+  // watch 负责「立刻」，轮询负责「最多 5 秒一定发现」（watch 会漏事件）
+  const configWatcher = new ConfigWatcher({
+    file: paths.config,
+    logger,
+    onChange: onConfigChanged,
+    ...(opts.configPollMs !== undefined ? { pollMs: opts.configPollMs } : {}),
+  });
+  configWatcher.start();
 
   ctx.chat.prune(); // 聊天记录保留 30 天
   // 主人昵称没填时按 UID 补一次（后台跑，失败就留着让用户手填；夹具模式跳过）
@@ -209,8 +223,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonStart> {
       listen.stop();
       clearInterval(tickTimer);
       clearInterval(heartbeatTimer);
-      if (watchTimer) clearTimeout(watchTimer);
-      watcher?.close();
+      configWatcher.stop();
       await runner.wait(20_000);
       await server.stop();
       clearRuntime(paths);

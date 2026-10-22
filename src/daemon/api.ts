@@ -30,6 +30,8 @@ import { discoverModel, keyFingerprint } from '../llm/discovery.ts';
 import { SPEC } from '../config/spec.ts';
 import type { ObjectSpec } from '../config/spec.ts';
 import { deleteOwnComment, sendManualDm } from '../orchestrator/manual.ts';
+import { createBackup } from '../backup.ts';
+import { checkUpdate } from '../update.ts';
 import { runDoctor } from '../doctor.ts';
 import type { AutostartService } from '../lifecycle/autostart.ts';
 
@@ -644,6 +646,31 @@ export function createHandlers(deps: PanelDeps): AllHandlers {
       const runner = deps.listenTick;
       if (!runner) return { skipped: ['监听循环没接上（夹具模式）'] };
       return runner();
+    },
+
+    /* ---------------- 更新与备份（M5） ---------------- */
+
+    async checkUpdate() {
+      return checkUpdate({ config: ctx.config.get(), currentVersion: version, logger: ctx.logger });
+    },
+
+    async backup() {
+      try {
+        const result = createBackup({ paths: ctx.paths, appVersion: version, includeDocs: true, includeSecrets: false });
+        ctx.logger.event('backup', `已备份 ${result.entries.length} 个文件`, {
+          target: 'backup',
+          data: { file: result.file, bytes: result.bytes },
+        });
+        return {
+          ok: true,
+          message: `已备份 ${result.entries.length} 个文件（${(result.bytes / 1024).toFixed(1)} KB）`,
+          file: result.file,
+          bytes: result.bytes,
+          entries: result.entries.length,
+        };
+      } catch (err) {
+        return { ok: false, message: `备份失败：${humanError(err)}` };
+      }
     },
   } as AllHandlers;
 }

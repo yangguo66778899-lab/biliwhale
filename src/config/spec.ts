@@ -102,6 +102,13 @@ export const SPEC = {
         autostart: { kind: 'boolean', label: '开机自启', desc: '写 HKCU Run 键，不需要管理员', default: true },
         tray: { kind: 'boolean', label: '显示托盘图标', desc: '关掉后只能用命令行/浏览器书签', default: true },
         singleInstance: { kind: 'boolean', label: '单实例', default: true },
+        updateUrl: {
+          kind: 'string',
+          label: '检查更新的地址',
+          desc: '留空 = 不检查。可填一个返回 {"version":"0.7.0","url":"…","notes":"…"} 的 JSON 地址',
+          default: '',
+          maxLen: 300,
+        },
         proxy: {
           kind: 'string',
           label: '代理',

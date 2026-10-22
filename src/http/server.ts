@@ -140,6 +140,9 @@ export interface PanelHandlers {
   dmClear(): { ok: boolean; message: string };
   /** M4：立刻跑一次监听（测试与手动触发）。 */
   listenNow(): Promise<unknown>;
+  /** M5：手动检查更新 / 立刻备份一次数据。 */
+  checkUpdate(): Promise<unknown>;
+  backup(): Promise<{ ok: boolean; message: string; file?: string; bytes?: number; entries?: number }>;
   /** DeepSeek key 的状态（只给指纹，绝不回显原值）。 */
   secretsStatus(): { hasApiKey: boolean; fingerprint: string; source: 'env' | 'file' | 'none' };
   /** 在面板里填/换 DeepSeek key，保存后立刻验证并生效。 */
@@ -623,6 +626,23 @@ export class ControlServer {
       const handler = this.handlers.listenNow;
       if (!handler) return this.notImplemented(res, 'listen/now');
       this.sendJson(res, 200, { ok: true, result: await handler() });
+      return;
+    }
+
+    /* ---- 更新与备份（M5） ---- */
+
+    if (method === 'GET' && url.pathname === '/api/update/check') {
+      const handler = this.handlers.checkUpdate;
+      if (!handler) return this.notImplemented(res, 'update/check');
+      this.sendJson(res, 200, { ok: true, result: await handler() });
+      return;
+    }
+
+    if (method === 'POST' && url.pathname === '/api/backup') {
+      const handler = this.handlers.backup;
+      if (!handler) return this.notImplemented(res, 'backup');
+      const result = await handler();
+      this.sendJson(res, result.ok ? 200 : 500, result);
       return;
     }
 

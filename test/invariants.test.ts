@@ -198,13 +198,14 @@ test('必需的文件都在（运行说明、许可证、归属、架构、接�
 });
 
 test('编码约定：.ps1 必须有 BOM（PowerShell 5.1 靠它认 UTF-8），.json 必须没有 BOM', () => {
-  const ps1 = walk(ROOT, ['.ps1']).filter((file) => !file.includes('node_modules'));
+  // dist/ 是打包产物（打包时会原样复制 BOM），不属于源码约定
+  const ps1 = walk(ROOT, ['.ps1']).filter((file) => !file.includes('node_modules') && !file.startsWith('dist'));
   for (const file of ps1) {
     const head = fs.readFileSync(file).subarray(0, 3);
     assert.deepEqual([...head], [0xef, 0xbb, 0xbf], `${path.relative(ROOT, file)} 缺 UTF-8 BOM，PowerShell 5.1 会把中文读成乱码`);
   }
 
-  const json = walk(ROOT, ['.json']).filter((file) => !file.includes('node_modules') && !file.includes('.npm-cache'));
+  const json = walk(ROOT, ['.json']).filter((file) => !file.includes('node_modules') && !file.includes('.npm-cache') && !file.startsWith('dist'));
   for (const file of json) {
     const head = fs.readFileSync(file).subarray(0, 3);
     assert.notDeepEqual([...head], [0xef, 0xbb, 0xbf], `${path.relative(ROOT, file)} 带 BOM，JSON.parse 会失败`);

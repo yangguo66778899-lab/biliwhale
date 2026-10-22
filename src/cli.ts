@@ -25,6 +25,8 @@ import { runRound } from './orchestrator/round.ts';
 import type { RoundDeps } from './orchestrator/round.ts';
 import { startDaemon, resolveTrayCommand, resolveTrayExe } from './daemon/index.ts';
 import { runDoctor } from './doctor.ts';
+import { createBackup, listBackup, restoreBackup } from './backup.ts';
+import { checkUpdate } from './update.ts';
 import { makeReplyDraft } from './orchestrator/replyDraft.ts';
 import { readRuntime, readHeartbeat, heartbeatFresh } from './lifecycle/runtime.ts';
 import { InstanceLock, isProcessAlive } from './lifecycle/lock.ts';
@@ -33,7 +35,7 @@ import type { Config } from './config/spec.ts';
 import type { RunTrigger } from './shared/types.ts';
 
 interface ParsedArgs {
-  command: 'run' | 'doctor' | 'config' | 'serve' | 'help';
+  command: 'run' | 'doctor' | 'config' | 'serve' | 'backup' | 'restore' | 'update' | 'version' | 'help';
   sub?: string;
   now: boolean;
   dry: boolean;
@@ -43,9 +45,17 @@ interface ParsedArgs {
   dataDir?: string;
   port?: number;
   trigger: RunTrigger;
+  /** backup：带凭据 / 只备数据 / 指定输出文件 / 查看备份内容。 */
+  withSecrets: boolean;
+  dataOnly: boolean;
+  outFile?: string;
+  list: boolean;
+  /** restore：从哪个 zip 恢复。 */
+  from?: string;
+  yes: boolean;
 }
 
-const VERSION = '0.6.1-M4';
+const VERSION = '0.7.0-M5';
 
 function parseArgs(argv: string[]): ParsedArgs {
   const args: ParsedArgs = {
@@ -56,6 +66,10 @@ function parseArgs(argv: string[]): ParsedArgs {
     mockModel: false,
     autostart: false,
     trigger: 'manual',
+    withSecrets: false,
+    dataOnly: false,
+    list: false,
+    yes: false,
   };
   const positional: string[] = [];
 
@@ -90,6 +104,27 @@ function parseArgs(argv: string[]): ParsedArgs {
         args.trigger = argv[i + 1] === 'schedule' ? 'schedule' : 'manual';
         i += 1;
         break;
+      case '--with-secrets':
+        args.withSecrets = true;
+        break;
+      case '--data-only':
+        args.dataOnly = true;
+        break;
+      case '--list':
+        args.list = true;
+        break;
+      case '--yes':
+      case '-y':
+        args.yes = true;
+        break;
+      case '--out':
+        args.outFile = argv[i + 1];
+        i += 1;
+        break;
+      case '--from':
+        args.from = argv[i + 1];
+        i += 1;
+        break;
       case '-h':
       case '--help':
         args.command = 'help';
@@ -104,10 +139,17 @@ function parseArgs(argv: string[]): ParsedArgs {
   if (cmd === 'run') args.command = 'run';
   else if (cmd === 'doctor') args.command = 'doctor';
   else if (cmd === 'serve') args.command = 'serve';
+  else if (cmd === 'backup') {
+    args.command = 'backup';
+    args.sub = sub;
+  } else if (cmd === 'restore') args.command = 'restore';
+  else if (cmd === 'update') args.command = 'update';
+  else if (cmd === 'version') args.command = 'version';
   else if (cmd === 'config') {
     args.command = 'config';
     args.sub = sub;
   } else if (cmd) args.command = 'run';
+  if (sub === 'list') args.list = true;
   if (sub && args.command === 'config') args.sub = sub;
   return args;
 }
@@ -161,7 +203,7 @@ async function commandRun(args: ParsedArgs): Promise<number> {
       : {}),
   };
 
-  ctx.logger.info('cli', `开跑：trigger=${args.trigger}${args.fixtures ? ' fixtures' : ''}（M0 只读）`);
+  ctx.logger.info('cli', `开跑：trigger=${args.trigger}${args.fixtures ? ' fixtures' : ''}（命令行一律预演；真发在面板/定时）`);
   const record = await runRound(deps, { trigger: args.trigger, dryRun: true });
 
   const seconds = Math.round((Date.now() - started) / 1000);
@@ -280,6 +322,87 @@ async function commandConfig(args: ParsedArgs): Promise<number> {
   return 2;
 }
 
+/* ---------------------------------------------------------------- backup / restore / update */
+
+async function commandBackup(args: ParsedArgs): Promise<number> {
+  // 查看备份内容不需要数据目录，也不该为了看一个 zip 去创建配置
+  if (args.list) {
+    const file = args.from ?? '';
+    if (!file) {
+      process.stderr.write('要查看备份内容，请给 --from <备份.zip>\n');
+      return 1;
+    }
+    const info = listBackup(file);
+    const lines = ['', `备份：${file}`, `  文件数：${info.entries.length}`];
+    if (info.manifest) {
+      lines.push(`  程序版本：${info.manifest.appVersion}（配置 v${info.manifest.configVersion ?? '?'}）`);
+      lines.push(`  创建时间：${info.manifest.createdAt}`);
+      lines.push(`  含凭据：${info.manifest.includesSecrets ? '是（恢复后不用重新登录）' : '否（恢复后需要重新登录）'}`);
+    }
+    for (const entry of info.entries.slice(0, 40)) lines.push(`    ${entry}`);
+    if (info.entries.length > 40) lines.push(`    …（还有 ${info.entries.length - 40} 个）`);
+    process.stdout.write(`${lines.join('\n')}\n`);
+    return 0;
+  }
+
+  const ctx = await bootstrap(args);
+
+  const result = createBackup({
+    paths: ctx.paths,
+    appVersion: VERSION,
+    includeDocs: !args.dataOnly,
+    includeSecrets: args.withSecrets,
+    ...(args.outFile ? { outFile: args.outFile } : {}),
+  });
+
+  const lines = [
+    '',
+    `备份完成：${result.file}`,
+    `  ${result.entries.length} 个文件 · ${(result.bytes / 1024).toFixed(1)} KB`,
+    `  含报告/日记：${args.dataOnly ? '否' : '是'}`,
+    `  含凭据：${result.manifest.includesSecrets ? '是' : '否（恢复后需要重新登录）'}`,
+  ];
+  process.stdout.write(`${lines.join('\n')}\n`);
+  return 0;
+}
+
+async function commandRestore(args: ParsedArgs): Promise<number> {
+  if (!args.from) {
+    process.stderr.write('要恢复请给 --from <备份.zip>（并加 --yes 确认覆盖当前数据）\n');
+    return 1;
+  }
+  const ctx = await bootstrap(args);
+  if (!args.yes) {
+    process.stderr.write(`恢复会用备份覆盖 ${ctx.paths.dataDir} 里的数据文件。\n确认无误请再加 --yes。\n`);
+    return 1;
+  }
+  const result = restoreBackup({ paths: ctx.paths, file: args.from, confirm: true });
+  const lines = ['', `已恢复 ${result.restored.length} 个文件到 ${ctx.paths.dataDir}`];
+  for (const name of result.restored.slice(0, 20)) lines.push(`  ✓ ${name}`);
+  if (result.restored.length > 20) lines.push(`  …（还有 ${result.restored.length - 20} 个）`);
+  for (const name of result.skipped) lines.push(`  - 跳过 ${name}`);
+  if (result.manifest && !result.manifest.includesSecrets) lines.push('提示：这份备份不含凭据，恢复后需要重新登录 B 站 / 重新填 key。');
+  process.stdout.write(`${lines.join('\n')}\n`);
+  return 0;
+}
+
+async function commandUpdate(args: ParsedArgs): Promise<number> {
+  const ctx = await bootstrap(args);
+  const result = await checkUpdate({ config: ctx.config.get(), currentVersion: VERSION, logger: ctx.logger });
+  const lines = ['', `当前版本：${result.current}`];
+  if (result.error) {
+    lines.push(`  ${result.error}`);
+    if (!result.configured) lines.push('  配置好地址后，面板「关于」页也有同样的按钮。');
+  } else {
+    lines.push(`  最新版本：${result.latest ?? '（没读出来）'}`);
+    lines.push(`  ${result.hasUpdate ? '有新版' : '已是最新'}`);
+    if (result.hasUpdate && result.url) lines.push(`  下载：${result.url}`);
+    if (result.notes) lines.push(`  说明：${result.notes.split('\n')[0]}`);
+  }
+  process.stdout.write(`${lines.join('\n')}\n`);
+  return 0;
+}
+
 function findFfmpeg(configured: string): string | null {
   if (configured) return fs.existsSync(configured) ? configured : null;
   const exts = (process.env.PATHEXT ?? '.EXE').split(';');
@@ -295,8 +418,7 @@ function findFfmpeg(configured: string): string | null {
   return null;
 }
 
-function help(): string {
-  return [
+function help(): string {  return [
     `BiliWhale ${VERSION} — 常驻托盘、只调用 DeepSeek 的 B 站「养鱼」程序内核`,
     '',
     '用法：',
@@ -305,6 +427,11 @@ function help(): string {
     '  node src/cli.ts doctor [--fixtures]              体检：目录/配置/凭据/网络/模型/自启/托盘/ffmpeg',
     '  node src/cli.ts config show                      打印当前配置（不含密钥）',
     '  node src/cli.ts config validate                  校验 config.json',
+    '  node src/cli.ts backup [--with-secrets] [--data-only] [--out <zip>]   备份数据（默认含报告/日记，不含凭据）',
+    '  node src/cli.ts backup list --from <zip>         看看某个备份里有什么',
+    '  node src/cli.ts restore --from <zip> --yes       从备份恢复（会覆盖当前数据）',
+    '  node src/cli.ts update                           检查更新（需要先在设置里填地址）',
+    '  node src/cli.ts version                          打印版本',
     '',
     '参数：',
     '  --data-dir <path>   覆盖数据目录（默认 %APPDATA%\\BiliWhale）',
@@ -332,6 +459,15 @@ async function main(): Promise<number> {
       return commandDoctor(args);
     case 'config':
       return commandConfig(args);
+    case 'backup':
+      return commandBackup(args);
+    case 'restore':
+      return commandRestore(args);
+    case 'update':
+      return commandUpdate(args);
+    case 'version':
+      process.stdout.write(`${VERSION}\n`);
+      return 0;
     default:
       process.stdout.write(`${help()}\n`);
       return 0;

@@ -116,6 +116,7 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
     trigger: options.trigger,
     dryRun: effectiveDryRun,
     configuredModel: deps.configuredModel ?? deps.llm.model,
+    now: now(),
   });
   const counts: RunCounts = { candidates: 0, screened: 0, deepRead: 0, selected: 0, shared: 0, skippedNoSubtitle: 0 };
   /** 真正发生的模型调用次数（一次 loop step = 一次 chat 调用），修复重试也算。 */
