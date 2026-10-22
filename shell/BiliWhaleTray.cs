@@ -36,6 +36,7 @@ namespace BiliWhaleTray
         public bool Paused;
         public string NextWakeAt;
         public string LastRunStatus;
+        public int PendingCount;
         public string LastError;
     }
 
@@ -172,6 +173,7 @@ namespace BiliWhaleTray
                     next.NextWakeAt = Json.Str(json, "nextWakeAt");
                     next.LastRunStatus = Json.Str(json, "lastRunStatus");
                     next.LastError = Json.Str(json, "lastError");
+                    next.PendingCount = ReadPendingCount();
                 }
                 else
                 {
@@ -182,6 +184,31 @@ namespace BiliWhaleTray
 
             health = next;
             ApplyHealthToMenu();
+        }
+
+        /// <summary>待审条数：只影响显示，取不到就算 0（不让托盘因为一个计数变红）。</summary>
+        private static int ReadPendingCount()
+        {
+            try
+            {
+                string body;
+                if (!TryRequest("GET", "/api/status", null, out body)) return 0;
+                Dictionary<string, object> json = Json.Parse(body);
+                object pendingObj;
+                if (!json.TryGetValue("pending", out pendingObj)) return 0;
+                Dictionary<string, object> pending = pendingObj as Dictionary<string, object>;
+                if (pending == null) return 0;
+                object countObj;
+                if (!pending.TryGetValue("count", out countObj)) return 0;
+                if (countObj is double) return (int)(double)countObj;
+                if (countObj is int) return (int)countObj;
+                if (countObj is long) return (int)(long)countObj;
+                return 0;
+            }
+            catch
+            {
+                return 0;
+            }
         }
 
         private static void ApplyHealthToMenu()
@@ -213,7 +240,8 @@ namespace BiliWhaleTray
             string next = string.IsNullOrEmpty(health.NextWakeAt) ? "" : " · 下一次 " + TimeText(health.NextWakeAt);
             string last = string.IsNullOrEmpty(health.LastRunStatus) ? "" : " · 上次 " + health.LastRunStatus;
             string err = string.IsNullOrEmpty(health.LastError) ? "" : " · 出错：" + health.LastError;
-            return phase + next + last + err;
+            string pending = health.PendingCount > 0 ? " · 待审 " + health.PendingCount : "";
+            return phase + next + last + pending + err;
         }
 
         /* ---------------- 动作 ---------------- */

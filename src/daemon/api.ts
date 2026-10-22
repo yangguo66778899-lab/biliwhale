@@ -23,6 +23,9 @@ import { localDate, localIso } from '../shared/time.ts';
 import { humanError } from '../shared/errors.ts';
 import { encodeQr, matrixToRows } from '../qr/encoder.ts';
 import { buildDiagBundle, diagFileName } from '../diagnostics.ts';
+import { approvePending, rejectPending, scanStrangerReplies } from '../orchestrator/pending.ts';
+import { makeReplyDraft } from '../orchestrator/replyDraft.ts';
+import { deleteOwnComment } from '../orchestrator/manual.ts';
 import { runDoctor } from '../doctor.ts';
 import type { AutostartService } from '../lifecycle/autostart.ts';
 
@@ -83,6 +86,8 @@ export function createHandlers(deps: PanelDeps): AllHandlers {
       if (!ctx.secrets.hasCookie()) warnings.push('还没有登录 B 站：字幕读不到（面板「账号」页可以扫码）');
       if (state.paused) warnings.push('自动唤醒已暂停（手动「现在跑一轮」仍然可用）');
       if (scheduler.error) warnings.push(`调度最近一次出错：${scheduler.error}`);
+      const pendingCount = ctx.pending.count();
+      if (pendingCount > 0) warnings.push(`有 ${pendingCount} 条陌生人回复在等你决定（面板「待审」页）`);
 
       return {
         scheduler: {
@@ -102,6 +107,7 @@ export function createHandlers(deps: PanelDeps): AllHandlers {
         },
         account: { loggedIn: account.hasCookie, ...(account.uname ? { name: account.uname } : {}), ...(account.mid ? { mid: account.mid } : {}) },
         model: { configured: ctx.configuredModel, actual: ctx.llm.model, discoveredAt: state.modelCache?.discoveredAt ?? null },
+        pending: { count: ctx.pending.count() },
         warnings,
       };
     },
@@ -307,6 +313,105 @@ export function createHandlers(deps: PanelDeps): AllHandlers {
       const doctor = await runDoctor(ctx, { version, fixtures: deps.fixtures, mockModel: deps.mockModel, offline: true });
       const bundle = await buildDiagBundle(ctx, { version, doctor });
       return { filename: diagFileName(), json: JSON.stringify(bundle, null, 2) };
+    },
+
+    /* ---------------- 待审（M3） ---------------- */
+
+    pending() {
+      const items = ctx.pending.pending();
+      return {
+        count: items.length,
+        items: items.map((item) => ({
+          id: item.id,
+          createdAt: item.createdAt,
+          expiresAt: item.expiresAt,
+          bvid: item.bvid,
+          root: item.root,
+          parent: item.parent,
+          target: item.target,
+          sourceComment: item.sourceComment,
+          draft: item.draft,
+          timesReplied: (() => {
+            const record = ctx.replied.get(item.target.mid);
+            return record ? record.times : 0;
+          })(),
+        })),
+        history: ctx.pending
+          .all()
+          .filter((item) => item.status !== 'pending')
+          .slice(-20)
+          .map((item) => ({ id: item.id, status: item.status, uname: item.target.uname, decidedAt: item.decidedAt ?? null, note: item.note ?? null })),
+      };
+    },
+
+    async approvePending(id: string, dryRun = false) {
+      const result = await approvePending(
+        {
+          logger: ctx.logger,
+          config: ctx.config.get(),
+          quota: ctx.quota,
+          state: ctx.state,
+          pending: ctx.pending,
+          replied: ctx.replied,
+          api: ctx.api,
+          writer: ctx.writer,
+          secrets: ctx.secrets,
+        },
+        id,
+        { dryRun },
+      );
+      return {
+        ok: result.ok,
+        message: result.message,
+        ...(result.rpid ? { rpid: result.rpid } : {}),
+        ...(result.verified !== undefined ? { verified: result.verified } : {}),
+      };
+    },
+
+    rejectPending(id: string, reason: string) {
+      const result = rejectPending(
+        {
+          logger: ctx.logger,
+          config: ctx.config.get(),
+          quota: ctx.quota,
+          state: ctx.state,
+          pending: ctx.pending,
+          replied: ctx.replied,
+          api: ctx.api,
+          writer: ctx.writer,
+          secrets: ctx.secrets,
+        },
+        id,
+        reason,
+      );
+      return result;
+    },
+
+    async scanPending() {
+      const result = await scanStrangerReplies(
+        {
+          logger: ctx.logger,
+          config: ctx.config.get(),
+          quota: ctx.quota,
+          state: ctx.state,
+          pending: ctx.pending,
+          replied: ctx.replied,
+          api: ctx.api,
+          writer: ctx.writer,
+          secrets: ctx.secrets,
+          draft: makeReplyDraft(ctx.llm, ctx.logger),
+        },
+        { maxPerRound: Math.max(1, ctx.config.get().listen.reply.maxPerRound) },
+      );
+      return result;
+    },
+
+    async deleteComment(bvid: string, rpid: string, dryRun = false) {
+      return deleteOwnComment(
+        { logger: ctx.logger, config: ctx.config.get(), quota: ctx.quota, state: ctx.state, writer: ctx.writer },
+        { bvid, rpid },
+        { dryRun },
+      );
     },
   } as AllHandlers;
 }

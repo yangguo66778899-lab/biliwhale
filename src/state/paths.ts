@@ -37,6 +37,10 @@ export interface Paths {
   runtime: string;
   notifyLog: string;
   fixturesDir: string;
+  /** 待审的回复草稿（pending/replies.json）。 */
+  pendingReplies: string;
+  /** 谁回过我们、回过几次（replied.json）。 */
+  replied: string;
 }
 
 function appData(): string {
@@ -90,6 +94,8 @@ export function resolvePaths(overrides: { dataDir?: string; localDir?: string } 
     runtime: path.join(localDir, 'runtime.json'),
     notifyLog: path.join(logsDir, 'notify.log'),
     fixturesDir: path.join(process.cwd(), 'fixtures'),
+    pendingReplies: path.join(dataDir, 'pending', 'replies.json'),
+    replied: path.join(dataDir, 'replied.json'),
   };
 }
 

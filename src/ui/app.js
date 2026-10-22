@@ -245,6 +245,7 @@ async function renderOverview() {
     el('div', { class: 'row' }, [el('span', {}, ['今日花费']), el('span', {}, [status.today.costCny > 0 ? `¥${status.today.costCny}` : `${status.today.tokens} token`])]),
     el('div', { class: 'row' }, [el('span', {}, ['账号']), el('span', {}, [status.account.loggedIn ? status.account.name || '已登录' : '未登录（去「账号」页扫码）'])]),
     el('div', { class: 'row' }, [el('span', {}, ['模型']), el('span', {}, [status.model.actual || status.model.configured])]),
+    el('div', { class: 'row' }, [el('span', {}, ['待审']), el('span', {}, [status.pending && status.pending.count > 0 ? `${status.pending.count} 条等你决定（去「待审」页）` : '没有'])]),
     el('div', { class: 'actions' }, [
       el('button', { class: 'primary', onClick: () => runRound(true) }, ['预演一轮']),
       el('button', { onClick: () => runRound(false) }, ['现在跑一轮']),
@@ -751,6 +752,101 @@ async function openDiary(date) {
   if (preview) preview.innerHTML = renderMarkdown(doc.markdown);
 }
 
+/* ---------------- 待审 ---------------- */
+
+async function renderPending() {
+  const panel = $('#panel-pending');
+  panel.innerHTML = '<h1>待审</h1><div class="card">读取中…</div>';
+  const data = await api('/api/pending');
+
+  panel.innerHTML = '';
+  panel.appendChild(el('h1', {}, ['待审']));
+  panel.appendChild(
+    el('div', { class: 'card' }, [
+      el('div', { class: 'hint', text: '陌生人回了我们的评论。发不发由你定；批准后才会真的发出去，并发完复核。' }),
+      el('div', { class: 'actions' }, [
+        el('button', { onClick: () => scanPending() }, ['扫描新回复']),
+        el('button', { onClick: () => renderPending() }, ['刷新']),
+      ]),
+    ]),
+  );
+
+  if (!data.items || data.items.length === 0) {
+    panel.appendChild(el('div', { class: 'card', text: '没有待审的回复。' }));
+  } else {
+    for (const item of data.items) {
+      panel.appendChild(
+        el('div', { class: 'card' }, [
+          el('div', { class: 'row' }, [
+            el('span', {}, ['谁']),
+            el('span', {}, [`${item.target.uname}（${item.target.mid}）${item.timesReplied > 1 ? ` · 第 ${item.timesReplied} 次回我们` : ''}`]),
+          ]),
+          el('div', { class: 'row' }, [el('span', {}, ['视频']), el('span', { class: 'mono' }, [item.bvid])]),
+          el('div', { class: 'row' }, [el('span', {}, ['他说的']), el('span', {}, [item.sourceComment])]),
+          el('div', { class: 'hint', text: `拟回复（${Array.from(item.draft).length} 字）` }),
+          el('pre', { class: 'md', text: item.draft }),
+          el('div', { class: 'hint', text: `创建于 ${new Date(item.createdAt).toLocaleString()}${item.expiresAt ? ` · 过期于 ${new Date(item.expiresAt).toLocaleString()}` : ''}` }),
+          el('div', { class: 'actions' }, [
+            el('button', { class: 'primary', onClick: () => approvePending(item.id, false) }, ['发']),
+            el('button', { onClick: () => approvePending(item.id, true) }, ['预演一下']),
+            el('button', { class: 'danger', onClick: () => rejectPending(item.id) }, ['不发']),
+          ]),
+        ]),
+      );
+    }
+  }
+
+  if (data.history && data.history.length > 0) {
+    const card = el('div', { class: 'card' }, [el('h3', {}, ['处理过的'])]);
+    const table = el('table');
+    table.appendChild(el('tr', {}, [el('th', {}, ['时间']), el('th', {}, ['谁']), el('th', {}, ['结果'])]));
+    for (const row of data.history.slice().reverse()) {
+      table.appendChild(
+        el('tr', {}, [
+          el('td', { class: 'mono' }, [row.decidedAt ? new Date(row.decidedAt).toLocaleString() : '—']),
+          el('td', {}, [row.uname]),
+          el('td', {}, [`${row.status}${row.note ? `（${row.note}）` : ''}`]),
+        ]),
+      );
+    }
+    card.appendChild(table);
+    panel.appendChild(card);
+  }
+}
+
+async function approvePending(id, dryRun) {
+  try {
+    const res = await api(`/api/pending/${encodeURIComponent(id)}/approve`, { method: 'POST', body: { dryRun } });
+    toast(res.message || (res.ok ? '已处理' : '没处理'), !res.ok);
+    await renderPending();
+  } catch (err) {
+    toast(String(err.message || err), true);
+  }
+}
+
+async function rejectPending(id) {
+  const reason = prompt('不发这条？可以写一句理由（记下来当偏好信号，可留空）');
+  if (reason === null) return;
+  try {
+    const res = await api(`/api/pending/${encodeURIComponent(id)}/reject`, { method: 'POST', body: { reason } });
+    toast(res.message || '已拒绝', !res.ok);
+    await renderPending();
+  } catch (err) {
+    toast(String(err.message || err), true);
+  }
+}
+
+async function scanPending() {
+  try {
+    const res = await api('/api/pending/scan', { method: 'POST' });
+    const created = Array.isArray(res.created) ? res.created.length : 0;
+    toast(created > 0 ? `新生成 ${created} 条待审` : '没有新的陌生人回复');
+    await renderPending();
+  } catch (err) {
+    toast(String(err.message || err), true);
+  }
+}
+
 /* ---------------- 日志 ---------------- */
 
 async function renderLogs() {
@@ -860,6 +956,7 @@ const routes = {
   account: renderAccount,
   reports: renderReports,
   diaries: renderDiaries,
+  pending: renderPending,
   logs: renderLogs,
   about: renderAbout,
 };

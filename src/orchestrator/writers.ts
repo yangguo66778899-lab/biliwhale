@@ -24,6 +24,16 @@ export interface VideoMeta {
   url: string;
 }
 
+/** 报告里只需要这几项（避免把执行器类型泄漏进 writers）。 */
+export interface ShareAttemptView {
+  status: 'sent' | 'unverified' | 'failed' | 'denied' | 'dry_run';
+  content: string;
+  rpid?: string;
+  verified?: boolean;
+  deny: string[];
+  error?: string;
+}
+
 export interface ReportInput {
   date: string;
   roundLabel: string;
@@ -32,6 +42,8 @@ export interface ReportInput {
   counts: RunCounts;
   videos: Map<string, VideoMeta>;
   shareDecisions: Map<string, GateDecision>;
+  /** M3：真正执行后的结果（有就按它渲染，比闸门结论更准）。 */
+  shareAttempts?: Map<string, ShareAttemptView>;
   usage: { promptTokens: number; completionTokens: number; costCny: number };
   dryRun: boolean;
   notes: string[];
@@ -62,7 +74,7 @@ function ensureHeader(file: string, header: string, intro?: string): void {
 }
 
 export function buildReportSection(input: ReportInput): string {
-  const { result, counts, videos, shareDecisions } = input;
+  const { result, counts, videos, shareDecisions, shareAttempts } = input;
   if (input.level === 'off') return '';
 
   const lines: string[] = [];
@@ -114,8 +126,11 @@ export function buildReportSection(input: ReportInput): string {
       lines.push(`- 分数：${item.score}/20`);
       lines.push(`- 为什么值得：${item.why}`);
       lines.push(`- 一句话：${item.oneliner}`);
+      const attempt = shareAttempts?.get(item.bvid);
       const decision = shareDecisions.get(item.bvid);
-      if (decision) {
+      if (attempt) {
+        renderShareAttempt(lines, attempt);
+      } else if (decision) {
         if (decision.allow) {
           lines.push(`- 分享：${item.share?.channel ?? '未指定'}（${input.dryRun ? '预演，未执行' : '已通过闸门'}）`);
         } else {
@@ -169,6 +184,32 @@ function cleanProse(text: string, max: number): string {
   const trimmed = text.trim();
   if (!trimmed) return '';
   return trimmed.length <= max ? trimmed : `${trimmed.slice(0, max - 1)}…`;
+}
+
+/** 把一次分享尝试写成两三行（人话，不掺内部术语）。 */
+function renderShareAttempt(lines: string[], attempt: ShareAttemptView): void {
+  const rpidText = attempt.rpid ? `（rpid ${attempt.rpid}）` : '';
+  switch (attempt.status) {
+    case 'sent':
+      lines.push(`- 分享：评论已发出${rpidText}${attempt.verified ? '，复核通过' : ''}`);
+      break;
+    case 'unverified':
+      lines.push(`- 分享：已发出${rpidText}，但复核没通过（不自动重发）`);
+      break;
+    case 'dry_run':
+      lines.push('- 分享：预演（没真的发）');
+      break;
+    case 'failed':
+      lines.push(`- 分享失败：${attempt.error ?? '未知原因'}（不自动重发）`);
+      break;
+    case 'denied':
+    default:
+      lines.push(`- 没发：${attempt.deny.join('；') || '闸门没过'}`);
+      break;
+  }
+  if (attempt.status === 'sent' || attempt.status === 'unverified' || attempt.status === 'dry_run') {
+    lines.push(`- 文案：${attempt.content}`);
+  }
 }
 
 /** 写报告：off 不写；其余追加到当天文件。 */

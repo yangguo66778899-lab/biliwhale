@@ -18,6 +18,9 @@ import { localIso } from './shared/time.ts';
 import { createBili } from './bili/api.ts';
 import type { BiliApi } from './bili/api.ts';
 import type { Transport } from './bili/http.ts';
+import { BiliWriter } from './bili/write.ts';
+import { PendingStore } from './state/pending.ts';
+import { RepliedLedger } from './state/replied.ts';
 import { LlmClient } from './llm/client.ts';
 import { discoverModel, keyFingerprint } from './llm/discovery.ts';
 import { ensurePromptFiles } from './agent/prompts.ts';
@@ -45,6 +48,12 @@ export interface AppContext {
   feedback: FeedbackLedger;
   runs: RunStore;
   api: BiliApi;
+  /** 写能力（M3：评论/楼中楼/删自己的评论）。 */
+  writer: BiliWriter;
+  /** 待审回复草稿。 */
+  pending: PendingStore;
+  /** 谁回过我们。 */
+  replied: RepliedLedger;
   /** 原始传输层（登录要读 Set-Cookie）。 */
   transport: Transport;
   llm: LlmClient;
@@ -132,6 +141,8 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<AppContext
     }
   }
 
+  const writer = new BiliWriter({ http: transport, csrf: () => secrets.biliJct(), logger });
+
   const configuredModel = current.llm.model;
   if ((opts.discover ?? true) && !opts.fixtures && !opts.mockModel && secrets.hasApiKey() && current.llm.modelAuto) {
     const decision = await discoverModel({ client: llm, configured: configuredModel, modelAuto: current.llm.modelAuto, logger });
@@ -150,6 +161,9 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<AppContext
     feedback,
     runs,
     api,
+    writer,
+    pending: PendingStore.open(paths.pendingReplies, logger),
+    replied: RepliedLedger.open(paths.replied, logger),
     transport,
     llm,
     configuredModel,

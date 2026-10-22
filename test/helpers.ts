@@ -3,6 +3,11 @@ import os from 'node:os';
 import path from 'node:path';
 import type { RoundDeps } from '../src/orchestrator/round.ts';
 import type { Paths } from '../src/state/paths.ts';
+import type { Transport } from '../src/bili/http.ts';
+import type { Logger } from '../src/shared/logger.ts';
+import { BiliWriter } from '../src/bili/write.ts';
+import { PendingStore } from '../src/state/pending.ts';
+import { RepliedLedger } from '../src/state/replied.ts';
 
 /** 测试用临时目录：放在仓库内（沙箱允许写），每次调用一个新目录。 */
 export function tmpDir(prefix: string): string {
@@ -13,6 +18,14 @@ export function tmpDir(prefix: string): string {
 }
 
 /** 仓库根（fixtures 相对它定位）。 */
+export function writeDeps(paths: Paths, logger: Logger, transport: Transport): Pick<RoundDeps, 'writer' | 'pending' | 'replied'> {
+  return {
+    writer: new BiliWriter({ http: transport, csrf: () => '', logger, skipThrottle: true }),
+    pending: PendingStore.open(paths.pendingReplies, logger),
+    replied: RepliedLedger.open(paths.replied, logger),
+  };
+}
+
 export function repoRoot(): string {
   return process.cwd();
 }
@@ -81,6 +94,9 @@ export async function createTestRound(dir: string): Promise<{
     quota,
     feedback,
     runs,
+    writer: new BiliWriter({ http: offline.transport, csrf: () => '', logger, skipThrottle: true }),
+    pending: PendingStore.open(paths.pendingReplies, logger),
+    replied: RepliedLedger.open(paths.replied, logger),
     configuredModel: cfg.llm.model,
   };
   return { deps, offline, paths };

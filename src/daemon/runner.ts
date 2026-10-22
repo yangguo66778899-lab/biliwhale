@@ -11,6 +11,7 @@
 import type { AppContext } from '../bootstrap.ts';
 import type { RoundDeps } from '../orchestrator/round.ts';
 import { runRound } from '../orchestrator/round.ts';
+import { makeReplyDraft } from '../orchestrator/replyDraft.ts';
 import { runSkipRound } from '../orchestrator/skip.ts';
 import type { PlannedSlot } from '../scheduler/plan.ts';
 import type { RunRecord } from '../shared/types.ts';
@@ -64,6 +65,10 @@ export class RoundRunner {
       seen: this.ctx.seen,
       quota: this.ctx.quota,
       feedback: this.ctx.feedback,
+      writer: this.ctx.writer,
+      pending: this.ctx.pending,
+      replied: this.ctx.replied,
+      pendingDraft: makeReplyDraft(this.ctx.llm, this.ctx.logger),
       runs: this.ctx.runs,
       configuredModel: this.ctx.configuredModel,
       ...(this.opts.fixtures || this.opts.mockModel ? { noCredentialsNeeded: true } : {}),

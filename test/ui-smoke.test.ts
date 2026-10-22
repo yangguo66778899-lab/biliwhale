@@ -99,7 +99,7 @@ interface RenderResult {
   errors: string[];
 }
 
-const ROUTES = ['overview', 'settings', 'account', 'reports', 'diaries', 'logs', 'about'] as const;
+const ROUTES = ['overview', 'settings', 'account', 'reports', 'diaries', 'pending', 'logs', 'about'] as const;
 
 async function renderPage(route: string): Promise<RenderResult> {
   const script = fs.readFileSync(path.join(process.cwd(), 'src', 'ui', 'app.js'), 'utf8');
@@ -157,6 +157,25 @@ async function renderPage(route: string): Promise<RenderResult> {
     '/api/diaries/public/2026-10-21': { ok: true, date: '2026-10-21', markdown: '# 日记\n\n写点东西。' },
     '/api/diaries/private/2026-10-21': { ok: true, date: '2026-10-21', markdown: '# 私人\n\n心里话。' },
     '/api/models': { ok: true, configured: 'deepseek-flash', actual: 'deepseek-flash', budget: { tokens: 1200, calls: 2 } },
+    '/api/pending': {
+      ok: true,
+      count: 1,
+      items: [
+        {
+          id: '20261021120000-abcd',
+          createdAt: now,
+          expiresAt: now,
+          bvid: 'BV1pend1',
+          root: '100',
+          parent: '200',
+          target: { mid: 888, uname: '路人甲' },
+          sourceComment: '这条我也喜欢',
+          draft: '我也这么觉得',
+          timesReplied: 1,
+        },
+      ],
+      history: [],
+    },
     '/api/run': { ok: true, message: '已开始' },
   };
 

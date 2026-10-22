@@ -170,7 +170,7 @@ test('报告与日记：列目录、读单篇、非法日期 400、不存在 404
 });
 
 test('体检与诊断包：都能出，且诊断包里不含凭据', async () => {
-  await withDaemon(async ({ base, auth, dir }) => {
+  await withDaemon(async ({ base, auth, dir, csrf }) => {
     fs.writeFileSync(
       path.join(dir, 'secrets.json'),
       JSON.stringify({ version: 1, bili: { cookie: 'SESSDATA=must-not-leak' }, deepseek: { apiKey: 'sk-must-not-leak' } }, null, 2),
@@ -187,6 +187,20 @@ test('体检与诊断包：都能出，且诊断包里不含凭据', async () =>
       assert.ok(names.includes(expected), `体检缺少「${expected}」`);
     }
     assert.equal(doctor.report.rows.find((row) => row.name === '单实例锁')?.level, 'warn', '自己在跑，锁那一行应该是 warn');
+
+    // M3：待审队列（空队列也要能读；批准/拒绝不存在的东西回 409）
+    const pendingList = (await (await fetch(`${base}/api/pending`, { headers: auth })).json()) as { ok: boolean; count: number; items: unknown[] };
+    assert.equal(pendingList.ok, true);
+    assert.equal(pendingList.count, 0);
+    assert.deepEqual(pendingList.items, []);
+    const approveMissing = await fetch(`${base}/api/pending/nope/approve`, { method: 'POST', headers: write(csrf, auth), body: '{}' });
+    assert.equal(approveMissing.status, 409);
+    const rejectMissing = await fetch(`${base}/api/pending/nope/reject`, {
+      method: 'POST',
+      headers: write(csrf, auth),
+      body: JSON.stringify({ reason: 'x' }),
+    });
+    assert.equal(rejectMissing.status, 409);
 
     const diag = await fetch(`${base}/api/diag`, { headers: auth });
     assert.equal(diag.status, 200);

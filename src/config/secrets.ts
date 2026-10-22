@@ -64,6 +64,35 @@ export class SecretsService {
     return this.cookie().length > 0;
   }
 
+  /**
+   * 写操作要的 csrf（bili_jct）。
+   * 从 cookie 里解析；没有就返回空串——上层据此报「重新登录」，绝不猜。
+   */
+  biliJct(): string {
+    const cookie = this.cookie();
+    if (!cookie) return '';
+    for (const part of cookie.split(';')) {
+      const [name, ...rest] = part.split('=');
+      if (name?.trim() === 'bili_jct') return rest.join('=').trim();
+    }
+    return '';
+  }
+
+  /** 当前登录账号自己的 mid（审批里判断「是不是主人」用）。 */
+  selfMid(): number {
+    const fromSecrets = Number(this.secrets.bili?.mid ?? 0);
+    if (Number.isFinite(fromSecrets) && fromSecrets > 0) return fromSecrets;
+    const cookie = this.cookie();
+    for (const part of cookie.split(';')) {
+      const [name, ...rest] = part.split('=');
+      if (name?.trim() === 'DedeUserID') {
+        const value = Number(rest.join('=').trim());
+        if (Number.isFinite(value) && value > 0) return value;
+      }
+    }
+    return 0;
+  }
+
   /** 只给摘要，不给原值。 */
   accountHint(): { hasCookie: boolean; fingerprint: string; uname?: string; mid?: number } {
     const cookie = this.cookie();

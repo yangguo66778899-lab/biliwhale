@@ -210,15 +210,54 @@ export interface RunRecord {
   notes: string[];
 }
 
-/** 额度/操作账本的一行（M0 只写 selected/skip 记录，不写真实发送）。 */
+/** 额度/操作账本的一行（同时是写操作的幂等账本：note 存幂等键）。 */
 export interface QuotaEntry {
   at: string;
   type: 'comment' | 'dm' | 'fav' | 'dynamic' | 'like';
   bvid: string;
+  /** 视频 aid（写接口要 oid=aid；bvid 换不到时就靠它）。 */
+  aid?: number;
+  /** 目标：分享评论是「@昵称」或 owner；审批回复是对方 mid。 */
   target: string;
   rpid?: string;
   share: boolean;
-  status: 'sent' | 'failed' | 'unverified' | 'dry_run';
+  status: 'sent' | 'failed' | 'unverified' | 'dry_run' | 'denied';
+  /** 幂等键 sha256(bvid|action|target|contentHash)：M3 起用它判重。 */
+  note?: string;
+  /** 实际发送的内容（已按配置上限截断）。 */
+  content?: string;
+  contentHash?: string;
+  /** 楼中楼要同时记 root 与 parent（§10.7）。 */
+  root?: string;
+  parent?: string;
+  /** 复核成功时间；空 = 没复核成（unverified）。 */
+  verifiedAt?: string;
+  attempts?: number;
+  error?: string;
+}
+
+/** 待审的回复草稿（陌生人回复走审批，§10.8）。 */
+export interface PendingReply {
+  id: string;
+  createdAt: string;
+  /** 过期时间（默认 7 天，过期自动作废）。 */
+  expiresAt: string;
+  status: 'pending' | 'sent' | 'rejected' | 'expired' | 'failed';
+  /** 我们那条评论所在的视频。 */
+  bvid: string;
+  aid: number;
+  /** 我们那条评论的 rpid（楼中楼的 root）。 */
+  root: string;
+  /** 对方回复的 rpid（楼中楼的 parent）。 */
+  parent: string;
+  target: { mid: number; uname: string };
+  /** 对方原话（截断，仅供判断）。 */
+  sourceComment: string;
+  /** 拟回复。 */
+  draft: string;
+  decidedAt?: string;
+  /** 批准后真正发出得到的 rpid。 */
+  rpid?: string;
   note?: string;
 }
 

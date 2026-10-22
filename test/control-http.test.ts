@@ -46,6 +46,7 @@ function fakeHandlers(calls: Calls, over: { runOk?: boolean; auto?: AutostartPay
         today: { wakes: 1, targetWakes: 1, shares: 0, shareCap: 3, tokens: 1234, costCny: 0.01 },
         account: { loggedIn: true, name: '测试' },
         model: { configured: 'deepseek-flash', actual: 'deepseek-flash', discoveredAt: null },
+        pending: { count: 0 },
         warnings: [],
       };
     },

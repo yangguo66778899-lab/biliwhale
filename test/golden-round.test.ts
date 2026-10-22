@@ -14,7 +14,7 @@ import { createOfflineStack } from '../src/dev/offline.ts';
 import { runRound } from '../src/orchestrator/round.ts';
 import type { RoundDeps } from '../src/orchestrator/round.ts';
 import { reportFile, diaryFile } from '../src/orchestrator/writers.ts';
-import { repoRoot, tmpDir, withEnv } from './helpers.ts';
+import { repoRoot, tmpDir, withEnv, writeDeps } from './helpers.ts';
 
 test('golden：离线夹具跑完整一轮（取候选 → 初筛 → 深读 → 报告/日记落盘，零远端写）', async () => {
   const dir = tmpDir('golden');
@@ -44,6 +44,7 @@ test('golden：离线夹具跑完整一轮（取候选 → 初筛 → 深读 →
       logger,
       api: offline.api,
       llm: offline.llm,
+      ...writeDeps(paths, logger, offline.transport),
       state,
       seen,
       quota,
@@ -135,7 +136,7 @@ test('第二轮不会再推同一批视频（判重生效）', async () => {
     const runs = new RunStore(paths.runsDir, logger);
     const offline = createOfflineStack({ paths, logger, config: cfg, fixturesDir: path.join(repoRoot(), 'fixtures') });
 
-    const deps: RoundDeps = { paths, config, secrets, logger, api: offline.api, llm: offline.llm, state, seen, quota, feedback, runs, configuredModel: cfg.llm.model };
+    const deps: RoundDeps = { paths, config, secrets, logger, api: offline.api, llm: offline.llm, state, seen, quota, feedback, runs, ...writeDeps(paths, logger, offline.transport), configuredModel: cfg.llm.model };
 
     const first = await runRound(deps, { trigger: 'manual', dryRun: true });
     assert.equal(first.counts.candidates, 5);

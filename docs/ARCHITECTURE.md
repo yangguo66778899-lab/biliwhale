@@ -30,6 +30,10 @@ daemon（src/daemon/）── 单实例 · 调度循环 · 心跳 · 优雅退�
    ├─ diagnostics.ts        脱敏诊断包
    ├─ account/login.ts      扫码登录 / cookie 粘贴 / nav 复核
    ├─ qr/encoder.ts         二维码编码器（自己写，零依赖）
+   ├─ bili/write.ts         写能力（M3：评论/楼中楼/删自己的；csrf + 签名 + 写间隔 + dry-run plan）
+   ├─ orchestrator/share.ts 分享执行器：闸门 → 幂等 → 发送 → 复核 → 记账
+   ├─ orchestrator/pending.ts 审批队列：扫描陌生人回复 → 草稿 → 批准/拒绝 → 复核
+   ├─ orchestrator/manual.ts  手动写（删自己的评论）：开关检查 + 只认自己账本里的 rpid
    └─ config/describe.ts    配置元数据（面板表单由它渲染）
         │
         ▼
@@ -75,6 +79,10 @@ orchestrator/round.ts  ── 一轮的相位机（唯一写文件、唯一记�
 | POST | `/api/account/qr` `/api/account/cookie` `/api/account/verify` `/api/account/logout` | 扫码 / 粘贴 / 复核 / 退出 |
 | GET | `/api/account/qr/poll?key=` | 扫码状态轮询 |
 | GET | `/api/reports` `/api/reports/:date` `/api/diaries` `/api/diaries/:kind/:date` | 报告与两本日记 |
+| GET | `/api/pending` | 待审草稿（含历史） |
+| POST | `/api/pending/scan` | 手动扫一次「我们评论下的新回复」 |
+| POST | `/api/pending/:id/approve` `/api/pending/:id/reject` | 批准（可带 `dryRun`）/ 拒绝（带理由） |
+| DELETE | `/api/comments/:bvid/:rpid` | 删自己发过的评论（只认账本里的 rpid） |
 | GET | `/` `/app.js` `/style.css` | 面板静态资源 |
 
 不在这张表里的路径一律 404；缺 handler 的面板接口回 501（方便分阶段上线）。
@@ -131,13 +139,23 @@ Phase 10 收尾     token 记账 / run 记录 / 事件    → state.noteRun + ad
 18. **配置只有一个来源**：面板渲染字段、校验、默认值全部来自 `config/spec.ts`；面板里不写死任何字段名或默认值。
 19. **凭据不进导出物**：`/api/config/export` 与 `/api/diag` 都不含 cookie / apiKey（诊断包最后统一过 `redactDeep`）。
 20. **登录态可验证**：扫码或粘贴之后必须调一次 `nav` 才算数；验不过就如实说「没验过」，不许假装已登录。
+21. **写只在一个文件里**：B 站写接口只许出现在 `bili/write.ts`；发评论只许被 `orchestrator/share.ts` 与 `pending.ts` 调，
+   删评论只许被 `orchestrator/manual.ts` 调（有不变式测试扫源码）。
+22. **发之前先过闸门**：`share.ts` 里必须先 `gateShare()` 再 `postComment()`，且必须查幂等账本（`hasSentContent`）。
+    所有拒绝理由都要收集起来写进报告（「为什么没发」可解释），不能第一个不过就 return。
+23. **发完必须复核，失败不重发**：3 次递增；没复核上标 `unverified`，只通知、不自动重试；rpid 取不到就写「没取到」，绝不编。
+24. **风控即停手**：`risk` 类的错误（412/12015/12051…）要立刻停掉本轮所有写、设冷却、写事件；
+    冷却期内分享与审批都拒绝。
+25. **陌生人回复一律走审批**：草稿进 `pending/replies.json`；批准才发、拒绝留理由、7 天过期作废；
+    审批发送同样受总写开关/急停/风控约束。
+26. **手动写也受同一套开关**：面板删评论走 `manual.ts`，只认自己账本里的 rpid，且需要 aid（对不上就拒绝）。
 
 ## 想加东西时改哪里
 
 | 要加的东西 | 改哪里 |
 |---|---|
 | 新的只读工具 | `agent/tools.ts` 的 `TOOLS`（写清 phases 与「什么时候别用」），再把关键材料加进 `orchestrator/prompts.ts` |
-| 新的写操作（M3） | 先写 `gate.ts` 的闸门与 dry-run，再写 `bili/api.ts` 的写函数；**没有闸门不许合并** |
+| 新的写操作（M4） | 先写 `gate.ts` 的闸门与 dry-run，再写 `bili/write.ts` 的函数（记得加进不变式的白名单）；**没有闸门不许合并** |
 | 新的配置项 | `config/spec.ts` 一处即可（默认值、校验、说明、未来的设置页都从这里生长） |
 | 新的产出文件 | `orchestrator/writers.ts`，并保证「多轮追加、不覆盖」 |
 | 新的通知渠道 | `notify/`（M4），失败要回退到 `logs/notify.log` |
@@ -169,3 +187,13 @@ Phase 10 收尾     token 记账 / run 记录 / 事件    → state.noteRun + ad
 - **cookie 是取值函数而不是常量**：`BiliHttp` 里 `cookie: string | (() => string)`，登录成功后 `secrets` 一变，下一次请求就带新 cookie，不需要重建客户端。
 - **体检只有一份实现**：`src/doctor.ts` 同时给 CLI 与 `/api/doctor` 用，避免「命令行说没事、面板说有事」这种最烦人的不一致。
 - **诊断包脱敏后才出网**：`buildDiagBundle` 最后统一过 `redactDeep`；测试里塞一个假 cookie 与假 key，断言包里一个字节都不出现。日记与报告只统计文件数，不打包正文。
+- **写请求先算形状再发送**：`planComment()` 是纯函数（csrf 打码），dry-run、报告、面板预览都复用它；真发才走 `postComment()`。
+  这样「预演」和「真发」不可能长得不一样，也保证了预演绝不会碰网络。
+- **幂等键放在账本里**：`sha256(bvid|action|target|contentHash)` 写进 `quota.json` 的 `note`。
+  为什么不用单独的账本文件：文档 §7.7 的文件清单里没有它，而额度账本本来就是「写操作台账」，多一份容易对不上。
+- **复核只看最新一页**：发完按 `sort=0`（时间倒序）拉第一页找 rpid，命中就算复核通过；3 次递增（0/2s/6s）。
+  不翻页是刻意的：翻页会把「刚发就被折叠」这种正常情况误判成失败，代价是漏判——漏判标 `unverified` 比误判「重发」安全。
+- **写间隔与读间隔分开**：读 1.5s + 抖动，写 5s + 0–1s 抖动（写层自己计时，不复用读队列的节流）。
+- **待审队列不自动清零**：草稿会一直留着直到你处理或 7 天过期；过期只是改状态，不删记录（历史还能看）。
+- **「主人」在单账号下就是自己**：自己回自己的评论在扫描阶段直接跳过；`ownerDirect`（主人直发）要等 M4 的双账号/监听场景，
+  M3 里没有留那段走不到的代码。

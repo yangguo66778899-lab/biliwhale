@@ -43,6 +43,8 @@ export interface StatusPayload {
   today: { wakes: number; targetWakes: number; shares: number; shareCap: number; tokens: number; costCny: number };
   account: { loggedIn: boolean; name?: string; mid?: number };
   model: { configured: string; actual: string; discoveredAt: string | null };
+  /** M3：待审回复条数（托盘与概览都要显示）。 */
+  pending: { count: number };
   warnings: string[];
 }
 
@@ -116,6 +118,13 @@ export interface PanelHandlers {
   diary(kind: 'public' | 'private', date: string): DocFile | null;
   doctor(): Promise<unknown>;
   diag(): Promise<{ filename: string; json: string }>;
+  /** M3：待审的回复草稿。 */
+  pending(): unknown;
+  approvePending(id: string, dryRun?: boolean): Promise<ActionResult & { rpid?: string; verified?: boolean }>;
+  rejectPending(id: string, reason: string): ActionResult;
+  scanPending(): Promise<unknown>;
+  /** M3：删自己发过的评论（面板手动、二次确认）。 */
+  deleteComment(bvid: string, rpid: string, dryRun?: boolean): Promise<ActionResult>;
 }
 
 export interface ControlServerOptions {
@@ -458,6 +467,53 @@ export class ControlServer {
       const doc = handler(kind, date);
       if (!doc) return this.sendJson(res, 404, { ok: false, error: '那一份日记不存在' });
       this.sendJson(res, 200, { ok: true, kind, ...doc });
+      return;
+    }
+
+    /* ---- 待审（M3） ---- */
+
+    if (method === 'GET' && url.pathname === '/api/pending') {
+      const handler = this.handlers.pending;
+      if (!handler) return this.notImplemented(res, 'pending');
+      this.sendJson(res, 200, { ok: true, ...(handler() as object) });
+      return;
+    }
+
+    if (method === 'POST' && url.pathname === '/api/pending/scan') {
+      const handler = this.handlers.scanPending;
+      if (!handler) return this.notImplemented(res, 'pending/scan');
+      this.sendJson(res, 200, { ok: true, ...(await handler() as object) });
+      return;
+    }
+
+    const approveMatch = /^\/api\/pending\/([^/]+)\/approve$/.exec(url.pathname);
+    if (method === 'POST' && approveMatch) {
+      const handler = this.handlers.approvePending;
+      if (!handler) return this.notImplemented(res, 'pending/approve');
+      const body = await readJsonBody(req);
+      const dryRun = isRecord(body) && 'dryRun' in body ? Boolean(body.dryRun) : false;
+      const result = await handler(decodeURIComponent(approveMatch[1] ?? ''), dryRun);
+      this.sendJson(res, result.ok ? 200 : 409, result);
+      return;
+    }
+
+    const rejectMatch = /^\/api\/pending\/([^/]+)\/reject$/.exec(url.pathname);
+    if (method === 'POST' && rejectMatch) {
+      const handler = this.handlers.rejectPending;
+      if (!handler) return this.notImplemented(res, 'pending/reject');
+      const body = await readJsonBody(req);
+      const reason = isRecord(body) && typeof body.reason === 'string' ? body.reason : '';
+      const result = handler(decodeURIComponent(rejectMatch[1] ?? ''), reason);
+      this.sendJson(res, result.ok ? 200 : 409, result);
+      return;
+    }
+
+    const deleteMatch = /^\/api\/comments\/([A-Za-z0-9]+)\/([^/]+)$/.exec(url.pathname);
+    if (method === 'DELETE' && deleteMatch) {
+      const handler = this.handlers.deleteComment;
+      if (!handler) return this.notImplemented(res, 'comments/delete');
+      const result = await handler(deleteMatch[1] ?? '', decodeURIComponent(deleteMatch[2] ?? ''), false);
+      this.sendJson(res, result.ok ? 200 : 409, result);
       return;
     }
 

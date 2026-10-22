@@ -269,6 +269,32 @@ export class BiliApi implements WbiProvider {
       },
     };
   }
+
+  /**
+   * 复核用：在**最新一页**评论里找这条 rpid（sort=0 按时间倒序，刚发的就在第一页）。
+   * 返回 false 表示「这一页没看到」——上层据此判 unverified，不自动重发。
+   */
+  async findComment(aid: number, rpid: string, page = 1): Promise<Result<boolean>> {
+    const res = await this.http.json<ReplyRaw>({
+      url: `${API}/x/v2/reply`,
+      query: { type: 1, oid: aid, sort: 0, ps: 20, pn: page },
+      referer: REFERER_HOME,
+    });
+    if (!res.ok) return res;
+    const replies = (Array.isArray(res.data?.replies) ? res.data.replies : []) as ReplyItemRaw[];
+    const found = replies.some((reply) => String(reply?.rpid ?? '') === String(rpid));
+    return { ok: true, data: found };
+  }
+
+  /** 复核楼中楼回复：在 root 的回复里找 parent 那条（内容也要对得上）。 */
+  async findReply(aid: number, root: string, parent: string, expected?: string): Promise<Result<boolean>> {
+    const thread = await this.threadReplies(aid, root);
+    if (!thread.ok) return thread;
+    const matched = thread.data.replies.find((reply) => String(reply.rpid) === String(parent));
+    if (!matched) return { ok: true, data: false };
+    if (!expected) return { ok: true, data: true };
+    return { ok: true, data: matched.message.includes(expected.slice(0, 20)) };
+  }
 }
 
 /* ---------- 工厂：把 http 与 api 接起来（api 同时是 http 的签名器） ---------- */

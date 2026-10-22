@@ -25,6 +25,7 @@ import { runRound } from './orchestrator/round.ts';
 import type { RoundDeps } from './orchestrator/round.ts';
 import { startDaemon, resolveTrayCommand, resolveTrayExe } from './daemon/index.ts';
 import { runDoctor } from './doctor.ts';
+import { makeReplyDraft } from './orchestrator/replyDraft.ts';
 import { readRuntime, readHeartbeat, heartbeatFresh } from './lifecycle/runtime.ts';
 import { InstanceLock, isProcessAlive } from './lifecycle/lock.ts';
 import { AutostartService } from './lifecycle/autostart.ts';
@@ -44,7 +45,7 @@ interface ParsedArgs {
   trigger: RunTrigger;
 }
 
-const VERSION = '0.3.0-M2';
+const VERSION = '0.4.0-M3';
 
 function parseArgs(argv: string[]): ParsedArgs {
   const args: ParsedArgs = {
@@ -141,6 +142,10 @@ async function commandRun(args: ParsedArgs): Promise<number> {
     quota: ctx.quota,
     feedback: ctx.feedback,
     runs: ctx.runs,
+    writer: ctx.writer,
+    pending: ctx.pending,
+    replied: ctx.replied,
+    pendingDraft: makeReplyDraft(ctx.llm, ctx.logger),
     configuredModel: ctx.configuredModel,
     ...(args.fixtures
       ? {

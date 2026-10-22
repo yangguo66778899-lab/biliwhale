@@ -15,7 +15,7 @@ import { runRound } from '../src/orchestrator/round.ts';
 import type { RoundDeps } from '../src/orchestrator/round.ts';
 import { diaryFile, reportFile } from '../src/orchestrator/writers.ts';
 import { localDate } from '../src/shared/time.ts';
-import { repoRoot, tmpDir, withEnv } from './helpers.ts';
+import { repoRoot, tmpDir, withEnv, writeDeps } from './helpers.ts';
 
 /** 复制一份可用夹具，但把模型响应换成「彻底不可用」的内容。 */
 function brokenModelFixtures(): string {
@@ -57,6 +57,7 @@ test('模型输出两次都不可用：修一次后降级，仍写出报告与�
       quota,
       feedback,
       runs,
+      ...writeDeps(paths, logger, offline.transport),
       configuredModel: cfg.llm.model,
     };
 
@@ -144,7 +145,7 @@ test('深读第一次缺字段 → 修一次就成功（只多花一次调用，
     const feedback = FeedbackLedger.open(paths.feedback, logger);
     const runs = new RunStore(paths.runsDir, logger);
     const offline = createOfflineStack({ paths, logger, config: cfg, fixturesDir: root, llmFiles: [screenFile, badDeep, goodDeep] });
-    const deps: RoundDeps = { paths, config, secrets, logger, api: offline.api, llm: offline.llm, state, seen, quota, feedback, runs, configuredModel: cfg.llm.model };
+    const deps: RoundDeps = { paths, config, secrets, logger, api: offline.api, llm: offline.llm, state, seen, quota, feedback, runs, ...writeDeps(paths, logger, offline.transport), configuredModel: cfg.llm.model };
 
     const record = await runRound(deps, { trigger: 'manual', dryRun: true });
 

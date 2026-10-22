@@ -16,6 +16,9 @@ import type { BiliApi } from '../bili/api.ts';
 import type { LlmClient } from '../llm/client.ts';
 import type { AppStateStore } from '../state/appState.ts';
 import type { FeedbackLedger, QuotaLedger, SeenLedger } from '../state/ledgers.ts';
+import type { PendingStore } from '../state/pending.ts';
+import type { RepliedLedger } from '../state/replied.ts';
+import type { BiliWriter } from '../bili/write.ts';
 import { decideSilence } from '../state/ledgers.ts';
 import type { RunStore } from '../state/runs.ts';
 import type { Paths } from '../state/paths.ts';
@@ -38,6 +41,10 @@ import { localDate, localIso, formatHhmm } from '../shared/time.ts';
 import { humanError } from '../shared/errors.ts';
 import { collectCandidates } from './candidates.ts';
 import { gateShare } from './gate.ts';
+import type { GateDecision } from './gate.ts';
+import { executeShares, summarizeShares } from './share.ts';
+import type { ShareAttempt } from './share.ts';
+import { scanStrangerReplies } from './pending.ts';
 import { buildDeepPrompt, buildScreenPrompt, clip, pickDeepReads } from './prompts.ts';
 import { appendNotifyLog, writeArchive, writeDiary, writeReport, videoUrl, skipReasonText } from './writers.ts';
 import { buildSystemMessage, buildUserPreamble, loadPromptAssets } from '../agent/prompts.ts';
@@ -59,6 +66,17 @@ export interface RoundDeps {
   quota: QuotaLedger;
   feedback: FeedbackLedger;
   runs: RunStore;
+  /** 写能力（M3）。 */
+  writer: BiliWriter;
+  /** 待审队列与「谁回过我们」。 */
+  pending: PendingStore;
+  replied: RepliedLedger;
+  /** 测试注入：复核间隔（毫秒），默认 0/2s/6s。 */
+  shareVerifyDelaysMs?: number[];
+  /** 测试注入：写间隔与复核等待都跳过。 */
+  skipWriteWait?: boolean;
+  /** 测试注入：拟回复生成器。 */
+  pendingDraft?: (input: { source: string; uname: string; videoTitle: string; maxChars: number }) => Promise<string | null>;
   /** 配置里写的模型名（用于 run 记录里的「配置 vs 实际」对照）。 */
   configuredModel?: string;
   /** 真实凭据不参与（夹具 / 模拟模型）：预检不强制 API key。 */
@@ -448,34 +466,78 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
     data: { selected: result.selected.map((s) => s.bvid), score: result.selected.map((s) => s.score) },
   });
 
-  // ---------------------------------------------------------------- 闸门（只判不发）
-  const shareDecisions = new Map<string, ReturnType<typeof gateShare>>();
-  for (const item of result.selected) {
-    const decision = gateShare({
-      writeEnabled: cfg.safety.writeEnabled,
-      killSwitch: cfg.safety.killSwitch,
-      dryRun: true,
-      shareEnabled: cfg.share.enabled,
-      channel: item.share?.channel ?? 'none',
-      allowedChannels: cfg.share.enabled ? [cfg.share.via] : [],
-      score: item.score,
-      minScore: cfg.share.minScore,
-      scoreEnabled: cfg.score.enabled,
-      deepRead: ctxForResult.deepReadBvids.has(item.bvid),
+  // ---------------------------------------------------------------- 闸门 + 执行分享（M3）
+  // 判定与执行是同一段：闸门说「不发」就一条都不发；说「发」才走写层。
+  // dryRun 由「本次手动预演」或「配置里一律预演」共同决定，两者任一为真都不真发。
+  const effectiveDryRun = options.dryRun || cfg.safety.dryRun;
+  const shareReport = await executeShares(
+    {
+      logger,
+      quota: deps.quota,
+      state: deps.state,
+      writer: deps.writer,
+      api: deps.api,
+      config: cfg,
+      now,
+      ...(deps.shareVerifyDelaysMs ? { verifyDelaysMs: deps.shareVerifyDelaysMs } : {}),
+      ...(deps.skipWriteWait ? { skipWait: true } : {}),
+    },
+    {
+      items: result.selected.map((item) => ({
+        bvid: item.bvid,
+        aid: videosAid(deepReads, item.bvid),
+        score: item.score,
+        share: item.share,
+        inDeepRead: ctxForResult.deepReadBvids.has(item.bvid),
+      })),
       todayShares,
-      shareCap: silence.shareCap,
-      dailyCap: cfg.share.dailyCap,
-      lastShareAt: deps.quota.lastSentAt(item.bvid),
-      perVideoDays: cfg.share.perVideoDays,
       silenceCap: silence.shareCap,
-      riskCooldown: deps.state.inRiskCooldown(now()),
-      now: now(),
+      dryRun: effectiveDryRun,
+    },
+  );
+  counts.shared = shareReport.sent;
+
+  const shareDecisions = new Map<string, ReturnType<typeof gateShare>>();
+  for (const attempt of shareReport.attempts) {
+    shareDecisions.set(attempt.bvid, {
+      allow: attempt.status === 'sent' || attempt.status === 'dry_run' || attempt.status === 'unverified',
+      deny: attempt.deny,
+      notes: attempt.notes,
     });
-    shareDecisions.set(item.bvid, decision);
   }
-  const denied = [...shareDecisions.values()].filter((d) => !d.allow).length;
-  if (denied > 0) notes.push(`${denied} 条挑中的没发出去（原因写在每条的「没发」里）`);
-  if (result.selected.length > 0) notes.push('M0 只读：所有分享只到闸门，没有真实发送');
+  if (shareReport.attempts.length > 0) notes.push(`分享：${summarizeShares(shareReport)}`);
+  for (const attempt of shareReport.attempts) {
+    for (const line of attempt.deny) notes.push(`没发 ${attempt.bvid}：${line}`);
+    for (const line of attempt.notes) {
+      if (line.startsWith('已发') || line.startsWith('已发出') || line.startsWith('预演')) notes.push(line);
+    }
+  }
+  if (shareReport.stopped === 'risk') errors.push('撞风控：本轮已停写，冷却期内不再发');
+
+  // 陌生人回复：把我们评论下的新回复落成待审草稿（M3 只建队列，不自动回）
+  if (cfg.listen.reply.strangerApproval && shareReport.sent > 0 && !effectiveDryRun) {
+    try {
+      const scan = await scanStrangerReplies({
+        logger,
+        config: cfg,
+        quota: deps.quota,
+        state: deps.state,
+        pending: deps.pending,
+        replied: deps.replied,
+        api: deps.api,
+        writer: deps.writer,
+        secrets: deps.secrets,
+        now,
+        ...(deps.pendingDraft ? { draft: deps.pendingDraft } : {}),
+      });
+      if (scan.created.length > 0) {
+        notes.push(`${scan.created.length} 条陌生人回复进了待审队列（面板「待审」页处理）`);
+        markPhase('pending', 0, 'ok', `${scan.created.length} 条待审`);
+      }
+    } catch (err) {
+      notes.push(`待审扫描失败（不影响本轮）：${humanError(err)}`);
+    }
+  }
 
   // ---------------------------------------------------------------- Phase 8 落盘
   const phase8 = Date.now();
@@ -488,6 +550,7 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
     counts,
     videos,
     shareDecisions,
+    shareAttempts: new Map(shareReport.attempts.map((attempt) => [attempt.bvid, attempt])),
     usage: { promptTokens: usage.promptTokens, completionTokens: usage.completionTokens, costCny: 0 },
     dryRun: true,
     notes,
@@ -552,6 +615,11 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
   // ---------------------------------------------------------------- Phase 10 收尾
   const status2: RunRecord['status'] = errors.length === 0 && !resultDegraded ? 'ok' : 'degraded';
   return finish(status2);
+}
+
+/** 从深读结果里拿 aid（写接口要 oid=aid）；取不到就 0，上层会拒绝而不是瞎猜。 */
+function videosAid(deepReads: DeepRead[], bvid: string): number {
+  return deepReads.find((read) => read.bvid === bvid)?.video.aid ?? 0;
 }
 
 /* ---------- 相位辅助 ---------- */
