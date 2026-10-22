@@ -4,6 +4,7 @@
 # 加 -RemoveData 会连数据一起删（会二次确认）。
 param(
   [switch]$RemoveData,
+  [switch]$NoRegister,
   [switch]$Yes,
   [string]$Target = ""
 )
@@ -41,6 +42,7 @@ try {
 }
 
 # 1) 开机自启
+if (-not $NoRegister) {
 $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
 try {
   if (Get-ItemProperty -Path $runKey -Name $appName -ErrorAction SilentlyContinue) {
@@ -70,6 +72,8 @@ try {
   Write-Step "环境变量删不掉（$($_.Exception.Message)）"
 }
 
+}
+
 # 4) 程序目录
 if (Test-Path $Target) {
   Remove-Item -Recurse -Force $Target
@@ -79,6 +83,10 @@ if (Test-Path $Target) {
 }
 
 # 5) 数据（默认保留）
+if ($NoRegister) {
+  Write-Step "跳过注册表/快捷方式/环境变量（-NoRegister）"
+}
+
 if ($RemoveData) {
   if (-not $Yes) {
     $answer = Read-Host "这会删掉你的日记/报告/账本（$dataDir），确定吗？输入 DELETE 继续"

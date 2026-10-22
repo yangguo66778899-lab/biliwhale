@@ -31,7 +31,7 @@ M5 把它做成能装的东西：便携包自带 Node、免管理员安装/卸�
 - 真实跑一轮：设 `BILIWHALE_API_KEY`（可选 `BILIWHALE_COOKIE`）后 `node src/cli.ts run --now --dry`
 - **想让它真的动起来**：面板「设置 → 分享」打开「允许对外分享」，并确认「安全 → 一律预演」是关的；
   先用「预演一轮」看文案与闸门结论，再让它真发。私聊/监听各有独立开关（「监听与回复」「通知」）。
-- 打包 / 性能 / 浸泡：`npm run pack` · `npm run bench` · `npm run soak`（7 天加速时钟）
+- 打包 / 性能 / 浸泡：`npm run pack` · `npm run bench` · `npm run soak`（7 天加速时钟）· `npm run rehearse`（装/跑/卸演练，不需要虚拟机）
 - 备份 / 恢复 / 查更新：`npm run backup` · `node src/cli.ts restore --from <zip> --yes` · `npm run update:check`
 
 完整需求与验收标准见 [`独立程序-需求文档.md`](./独立程序-需求文档.md)（v0.5），
@@ -92,7 +92,7 @@ shell\BiliWhaleTray.exe
 node src/cli.ts run --now --dry
 
 # 6) 验证
-npm test              # 301 个用例：写层/闸门/幂等/审批/收藏/私信/聊天/监听/面板/登录/二维码/调度/守护进程/离线整轮
+npm test              # 302 个用例：写层/闸门/幂等/审批/收藏/私信/聊天/监听/面板/登录/二维码/调度/守护进程/离线整轮
 npm run m0:offline    # 夹具整轮：不联网、不需要凭据
 npm run m0:live-read  # 真实 B 站数据 + 占位模型（不代表模型质量）
 npm run smoke:bili    # 真 B 站只读冒烟：WBI / 搜索 / 视频 / 评论 / 字幕轨
@@ -217,7 +217,7 @@ shell/BiliWhaleTray.cs  # C# 5 托盘（源码入库，exe 由 npm run tray:buil
 scripts/                # smoke-bili.ts（只读冒烟）、smoke-panel/m3/m4.mts、build-tray.ps1
                         # pack.mts（打便携包）、bench.mts（性能）、soak.mts（7 天浸泡）
 packaging/              # 便携包里的安装/卸载/启动脚本模板（install.ps1 等，带 BOM）
-test/                   # 单元 + 集成（301 个用例，含二维码对拍与面板渲染）
+test/                   # 单元 + 集成（302 个用例，含二维码对拍与面板渲染）
 fixtures/               # 离线夹具（B 站响应、模型输出）
 docs/                   # 架构说明、B 站接口规格、M0–M5 验收记录、用户手册
 ```

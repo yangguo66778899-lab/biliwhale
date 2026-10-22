@@ -9,10 +9,15 @@
 #
 # 数据不会被碰：配置/账本/报告在 %APPDATA%\BiliWhale，日志在 %LOCALAPPDATA%\BiliWhale。
 # 卸载见 uninstall.ps1（默认保留数据）。
+#
+# 只想试装一次、不想动系统？加 -NoRegister：
+#   只复制文件到 -Target 指定目录，不写注册表、不建快捷方式、不设环境变量、不启动；
+#   配合 -Target D:\BiliWhale-test 就是「用一个文件夹当假机器」，验完删掉即可。
 param(
   [switch]$Autostart,
   [switch]$Desktop,
   [switch]$NoLaunch,
+  [switch]$NoRegister,
   [string]$Target = ""
 )
 
@@ -69,11 +74,18 @@ foreach ($file in @("BiliWhale.cmd", "README.txt", "VERSION", "install.ps1", "un
 
 # 2) 用户环境变量：托盘靠它拉起内核（带引号，路径里有空格也不会坏）
 $kernel = '"{0}" "{1}" serve' -f (Join-Path $Target "runtime\node.exe"), (Join-Path $appTarget "src\cli.ts")
-[Environment]::SetEnvironmentVariable("BILIWHALE_KERNEL_CMD", $kernel, "User")
-$env:BILIWHALE_KERNEL_CMD = $kernel
-Write-Step "已设置 BILIWHALE_KERNEL_CMD（托盘用它启动内核）"
+if ($NoRegister) {
+  Write-Step "跳过环境变量（-NoRegister）：托盘会用这个目录里的 BiliWhale.cmd"
+} else {
+  [Environment]::SetEnvironmentVariable("BILIWHALE_KERNEL_CMD", $kernel, "User")
+  $env:BILIWHALE_KERNEL_CMD = $kernel
+  Write-Step "已设置 BILIWHALE_KERNEL_CMD（托盘用它启动内核）"
+}
 
 # 3) 快捷方式
+if ($NoRegister) {
+  Write-Step "跳过快捷方式（-NoRegister）"
+} else {
 $shell = New-Object -ComObject WScript.Shell
 $startMenu = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs"
 New-Item -ItemType Directory -Force -Path $startMenu | Out-Null
@@ -92,9 +104,10 @@ if ($Desktop) {
   $deskLink.Save()
   Write-Step "桌面快捷方式已建"
 }
+}
 
 # 4) 开机自启（可选）：只起托盘，不弹窗
-if ($Autostart) {
+if ($Autostart -and -not $NoRegister) {
   $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
   New-Item -Path $runKey -Force | Out-Null
   $tray = Join-Path $appTarget "shell\BiliWhaleTray.exe"
@@ -107,7 +120,7 @@ if ($Autostart) {
 }
 
 # 5) 启动
-if (-not $NoLaunch) {
+if (-not $NoLaunch -and -not $NoRegister) {
   $tray = Join-Path $appTarget "shell\BiliWhaleTray.exe"
   if (Test-Path $tray) {
     Start-Process -FilePath $tray -WorkingDirectory $appTarget | Out-Null
@@ -118,6 +131,15 @@ if (-not $NoLaunch) {
 }
 
 Write-Host ""
+if ($NoRegister) {
+  Write-Host "文件已复制到：$Target（-NoRegister：没写注册表、没建快捷方式、没设环境变量、没启动）"
+  Write-Host "想直接试："
+  Write-Host "  "$Target\runtime\node.exe" "$Target\app\src\cli.ts" serve"
+  Write-Host "  或双击 $Target\BiliWhale.cmd"
+  Write-Host "验完直接删掉这个目录即可，系统里什么都没留下。"
+  Write-Host ""
+  exit 0
+}
 Write-Host "装好了。下一步："
 Write-Host "  1. 托盘右键 → 打开面板（首次要带 token，托盘会自动带上）"
 Write-Host "  2. 面板「账号」页扫码登录，并填「主人 UID」（你自己的另一个 B 站号）"

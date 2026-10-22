@@ -21,6 +21,7 @@
     "doctor": "node src/cli.ts doctor",
     "pack": "node scripts/pack.mts",
     "pack:nozip": "node scripts/pack.mts --no-zip",
+    "rehearse": "node scripts/rehearse.mts",
     "bench": "node scripts/bench.mts",
     "soak": "node scripts/soak.mts",
     "backup": "node src/cli.ts backup",

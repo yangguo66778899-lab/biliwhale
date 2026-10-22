@@ -43,6 +43,15 @@ test('安装脚本：当前用户、不要求管理员、会设内核命令与�
   assert.match(install, /HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run/, '自启写 HKCU Run');
   assert.equal(/RunAs|Verb\s+runas|requireAdministrator|#requires\s+-RunAsAdministrator/i.test(install), false, '不许要求提权');
   assert.equal(/HKLM:/i.test(install), false, '不许写机器级注册表');
+  // 「不用虚拟机也能试装」靠它：只复制文件，不碰系统
+  assert.match(install, /\[switch\]\$NoRegister/, '要有 -NoRegister');
+  assert.match(install, /if \(\$NoRegister\)/, 'NoRegister 分支要真的跳过环境变量/快捷方式');
+});
+
+test('卸载脚本也支持 -NoRegister（只删目录，不动注册表）', () => {
+  const uninstall = read('packaging/uninstall.ps1');
+  assert.match(uninstall, /\[switch\]\$NoRegister/);
+  assert.match(uninstall, /if \(-not \$NoRegister\)/);
 });
 
 test('卸载脚本：默认保留数据，删自启与快捷方式，-RemoveData 才删数据', () => {
