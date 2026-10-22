@@ -132,6 +132,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonStart> {
     version: opts.version,
     port: opts.port ?? cfg.ui.port,
     logger,
+    // 面板启动时就要按配置上色（不用先点进设置页）：通过 /api/session 带过去
+    theme: () => ctx.config.get().ui.theme,
   });
 
   const started = await server.start();

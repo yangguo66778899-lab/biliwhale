@@ -172,6 +172,8 @@ export interface ControlServerOptions {
   host?: string;
   /** 静态资源目录（默认 src/ui）。 */
   uiDir?: string;
+  /** 面板配色（读取配置里的 ui.theme）；/api/session 会带上它，页面启动时就按它上色。 */
+  theme?: () => string;
 }
 
 const MAX_BODY_BYTES = 512 * 1024;
@@ -200,6 +202,7 @@ export class ControlServer {
   private readonly logger: Logger;
   private readonly host: string;
   private readonly uiDir: string;
+  private readonly theme: (() => string) | null;
   private readonly startedAt = Date.now();
   /** 会话 cookie 的值：随机、只在内存里，重启即换（不是 token 本身）。 */
   private readonly sessionId = crypto.randomBytes(24).toString('hex');
@@ -213,6 +216,7 @@ export class ControlServer {
     this.logger = opts.logger;
     this.host = opts.host ?? '127.0.0.1';
     this.uiDir = opts.uiDir ?? path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'ui');
+    this.theme = opts.theme ?? null;
   }
 
   get port(): number {
@@ -321,7 +325,8 @@ export class ControlServer {
     }
 
     if (method === 'GET' && url.pathname === '/api/session') {
-      this.sendJson(res, 200, { ok: true, csrfToken: this.csrfToken, version: this.version });
+      const theme = this.readTheme();
+      this.sendJson(res, 200, { ok: true, csrfToken: this.csrfToken, version: this.version, ...(theme ? { theme } : {}) });
       return;
     }
 
@@ -750,6 +755,17 @@ export class ControlServer {
       if (value.length === this.sessionId.length && safeEqual(value, this.sessionId)) return true;
     }
     return false;
+  }
+
+  /** 面板配色：读配置失败就当「跟着系统」（不给页面塞一个坏值）。 */
+  private readTheme(): string | null {
+    if (!this.theme) return null;
+    try {
+      const value = String(this.theme() ?? '').trim();
+      return value === 'light' || value === 'dark' ? value : 'auto';
+    } catch {
+      return 'auto';
+    }
   }
 
   /** 没凭据时的说明页（比一行 JSON 友好，也不泄漏任何数据）。 */

@@ -158,7 +158,11 @@ test('getSpec 能取到字段说明（设置页将来要用）', () => {
   const spec = getSpec('share.dailyCap');
   assert.ok(spec);
   assert.equal(spec?.kind, 'number');
-  assert.equal(spec?.label, '每日分享上限');
+  // P1 文案重做后，这条从「每日分享上限」变成「一天最多发几条（0–10）」。
+  // 断言改成钉「有数量、有范围、有说明」，不再钉某一句具体措辞——否则每次改进文案都要跟着改测试。
+  assert.match(spec?.label ?? '', /一天最多发几条/);
+  assert.match(spec?.label ?? '', /0–10/);
+  assert.ok((spec?.desc ?? '').length > 0, '这个字段要有一句说明');
   assert.equal(getSpec('nope.nothing'), undefined);
 });
 

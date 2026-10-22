@@ -52,13 +52,16 @@ export function describeConfig(): GroupDescribe[] {
   for (const [key, field] of Object.entries(root.fields)) {
     if (field.kind !== 'object') continue;
     if (key === 'version') continue;
+    if (field.hidden) continue;
     groups.push({
       key,
       label: field.label,
       ...(field.desc ? { desc: field.desc } : {}),
       // 组内字段的绝对路径必须是 `组.字段`：面板保存时按它写回配置。
       // （曾经这里只给了字段名，结果面板把值写到了顶层垃圾字段上，开关永远打不开。）
-      fields: Object.entries(field.fields).map(([name, child]) => describeField(child, `${key}.${name}`, name)),
+      fields: Object.entries(field.fields)
+        .filter(([, child]) => !child.hidden)
+        .map(([name, child]) => describeField(child, `${key}.${name}`, name)),
     });
   }
   return groups;
@@ -100,6 +103,7 @@ function describeField(spec: FieldSpec, absPath: string, relPath: string): Field
       const fields: FieldDescribe[] = [];
       for (const [name, child] of Object.entries(spec.fields)) {
         // relPath 永远相对「它所在的那个对象」：面板编辑嵌套对象时按它取值/写值
+        if (child.hidden) continue;
         fields.push(describeField(child, `${absPath}.${name}`, name));
       }
       base.fields = fields;

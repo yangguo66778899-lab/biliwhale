@@ -105,7 +105,21 @@ async function loadSession() {
   const session = await api('/api/session');
   state.csrf = session.csrfToken;
   state.version = session.version;
+  // 启动时就按配置上色：不用先点进设置页（auto = 跟着系统，不设 data-theme）
+  applyTheme(session.theme);
   $('#version').textContent = `v${session.version}`;
+}
+
+/** 面板配色：auto 跟着系统；light/dark 明确覆盖系统。 */
+function applyTheme(theme) {
+  const root = typeof document !== 'undefined' ? document.documentElement : null;
+  if (!root || typeof root.setAttribute !== 'function') return;
+  const value = theme === 'light' || theme === 'dark' ? theme : 'auto';
+  if (value === 'auto') {
+    if (typeof root.removeAttribute === 'function') root.removeAttribute('data-theme');
+  } else {
+    root.setAttribute('data-theme', value);
+  }
 }
 
 function fmtWhen(iso) {
@@ -370,6 +384,7 @@ async function renderSettings() {
   panel.innerHTML = '<h1>设置</h1><div class="card">读取中…</div>';
   const [data, secrets] = await Promise.all([api('/api/config'), api('/api/secrets')]);
   state.config = data;
+  applyTheme(data.config && data.config.ui ? data.config.ui.theme : 'auto');
 
   panel.innerHTML = '';
   panel.appendChild(el('h1', {}, ['设置']));
@@ -456,7 +471,7 @@ function renderField(field, value, onChange) {
       ),
     );
     wrap.appendChild(area);
-    wrap.appendChild(el('div', { class: 'hint', text: '一行一个' }));
+    // 不再额外加「一行一个」的小字：字段标题里已经写了（P1 文案规范）
   } else if (field.widget === 'object') {
     const box = el('div', { class: 'item-card' });
     for (const child of field.fields || []) {
@@ -1012,7 +1027,6 @@ async function saveConfig() {
     toast(String(err.message || err), true);
   }
 }
-
 async function validateCurrent() {
   try {
     const res = await api('/api/config/validate', { method: 'POST', body: state.config.config });
