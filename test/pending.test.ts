@@ -95,9 +95,13 @@ function harness(opts: { strangerApproval?: boolean; ownerDirect?: boolean; writ
     secrets,
     writer,
     api: {
-      threadReplies: async () => ({ ok: true, data: { root: null, replies } }),
+      threadReplies: async () => ({ ok: true, data: { root: null, replies, pages: 1 } }),
       findReply: async () => ({ ok: true, data: found.value }),
       findComment: async () => ({ ok: true, data: found.value }),
+      video: async (bvid: string) => ({
+        ok: true,
+        data: { bvid, aid: 9001, cid: 1, title: 't', desc: '', durationSec: 60, pubdateIso: '', owner: { mid: 1, name: 'u' }, stats: {}, coverUrl: '' },
+      }),
     } as unknown as PendingDeps['api'],
     draft: async (input) => `回 ${input.uname}：我也这么觉得`,
   };
@@ -120,6 +124,80 @@ function seedOurComment(h: Harness, bvid = 'BV1pend1', rpid = '100', aid = 9001)
     contentHash: 'x',
   });
 }
+
+test('扫描明细：没人回 / 回复挂在别人下面 / 自己回自己，都要说清原因', async () => {
+  const h = harness();
+  seedOurComment(h);
+
+  // 1) 完全没人回
+  const empty = await scanStrangerReplies(h.deps);
+  assert.equal(empty.considered, 1);
+  assert.equal(empty.scanned, 1);
+  assert.equal(empty.created.length, 0);
+  assert.equal(empty.details[0]?.replies, 0);
+  assert.match(empty.details[0]?.note ?? '', /还没有任何回复/);
+
+  // 2) 回复挂在别人下面（parent 不是我们那条），不该生成草稿，要说明白
+  h.replies.push(comment({ rpid: '210', parent: '999', root: '100', mid: 888 }));
+  const nested = await scanStrangerReplies(h.deps);
+  assert.equal(nested.created.length, 0);
+  assert.match(nested.details[0]?.note ?? '', /挂在别人下面|parent=/);
+
+  // 3) 只有自己回的
+  h.replies.length = 0;
+  h.replies.push(comment({ rpid: '211', parent: '100', root: '100', mid: 999, uname: '鲸鲸' }));
+  const own = await scanStrangerReplies(h.deps);
+  assert.equal(own.created.length, 0);
+  assert.match(own.details[0]?.note ?? '', /都是我们自己发的/);
+});
+
+test('扫描：账本缺 aid 时用视频详情补上，不再静默跳过', async () => {
+  const h = harness();
+  // 手工塞一条没有 aid 的评论记录
+  h.quota.add({
+    at: new Date().toISOString(),
+    type: 'comment',
+    bvid: 'BV1pend1',
+    target: '@鲸鲸',
+    share: true,
+    status: 'sent',
+    rpid: '100',
+    note: 'no-aid',
+    content: 'x',
+    contentHash: 'y',
+  });
+  h.replies.push(comment({ rpid: '200', parent: '100', root: '100' }));
+
+  const result = await scanStrangerReplies(h.deps);
+  assert.equal(result.created.length, 1, '补到 aid 之后应该能生成草稿');
+  assert.ok(result.skipped.some((line) => line.includes('缺 aid')), result.skipped.join('\n'));
+  assert.equal(result.created[0]?.aid, 9001);
+});
+
+test('扫描：账本被别的进程改过时先重读磁盘（CLI 发的评论，守护进程也要看得见）', async () => {
+  const h = harness();
+  // 模拟「另一个进程」写账本：另开一个 QuotaLedger 指向同一文件
+  const other = QuotaLedger.open(path.join(h.dir, 'quota.json'), h.deps.logger);
+  other.add({
+    at: new Date().toISOString(),
+    type: 'comment',
+    bvid: 'BV1pend1',
+    aid: 9001,
+    target: '@鲸鲸',
+    share: true,
+    status: 'sent',
+    rpid: '100',
+    note: 'from-cli',
+    content: 'x',
+    contentHash: 'y',
+  });
+  h.replies.push(comment({ rpid: '200', parent: '100', root: '100' }));
+
+  // 守护进程里的 quota 实例是扫描之前创建的，内存里还没有这条
+  const result = await scanStrangerReplies(h.deps);
+  assert.equal(result.considered, 1, 'scan 前应该重新读一次账本');
+  assert.equal(result.created.length, 1);
+});
 
 test('待审存储：新增/查重/过期/更新', () => {
   const dir = tmpDir('pending-store');

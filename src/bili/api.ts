@@ -252,22 +252,29 @@ export class BiliApi implements WbiProvider {
     return { ok: true, data: replies.slice(0, limit).map((r) => toComment(r, '')) };
   }
 
-  /** 楼中楼：一页固定 20 条，拿不满就是到底了。 */
-  async threadReplies(aid: number, root: string, page = 1): Promise<Result<{ root: CommentItem | null; replies: CommentItem[] }>> {
-    const res = await this.http.json<ReplyThreadRaw>({
-      url: `${API}/x/v2/reply/reply`,
-      query: { type: 1, oid: aid, root, pn: page, ps: 20 },
-      referer: REFERER_HOME,
-    });
-    if (!res.ok) return res;
-    const replies = Array.isArray(res.data?.replies) ? res.data.replies : [];
-    return {
-      ok: true,
-      data: {
-        root: res.data?.root ? toComment(res.data.root, '') : null,
-        replies: replies.map((r) => toComment(r, root)),
-      },
-    };
+  /**
+   * 楼中楼：一页固定 20 条；这里翻到 `pages` 页并合并（默认 2 页）。
+   * 必须签名：B 站对 `/x/v2/reply/reply` 会查 wbi，不签名容易吃 -412（真机上就是扫不到回复）。
+   */
+  async threadReplies(aid: number, root: string, pages = 2): Promise<Result<{ root: CommentItem | null; replies: CommentItem[]; pages: number }>> {
+    const all: CommentItem[] = [];
+    let rootComment: CommentItem | null = null;
+    let fetched = 0;
+    for (let page = 1; page <= Math.max(1, pages); page += 1) {
+      const res = await this.http.json<ReplyThreadRaw>({
+        url: `${API}/x/v2/reply/reply`,
+        query: { type: 1, oid: aid, root, pn: page, ps: 20 },
+        referer: REFERER_HOME,
+        sign: true,
+      });
+      if (!res.ok) return res;
+      fetched = page;
+      if (!rootComment && res.data?.root) rootComment = toComment(res.data.root, '');
+      const pageReplies = Array.isArray(res.data?.replies) ? res.data.replies : [];
+      all.push(...pageReplies.map((r) => toComment(r, root)));
+      if (pageReplies.length < 20) break; // 拿不满就是到底了
+    }
+    return { ok: true, data: { root: rootComment, replies: all, pages: fetched } };
   }
 
   /**

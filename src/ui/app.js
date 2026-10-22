@@ -817,6 +817,7 @@ async function renderPending() {
         el('button', { onClick: () => scanPending() }, ['扫描新回复']),
         el('button', { onClick: () => renderPending() }, ['刷新']),
       ]),
+      el('div', { id: 'scan-result' }),
     ]),
   );
 
@@ -843,6 +844,27 @@ async function renderPending() {
         ]),
       );
     }
+  }
+
+  if (data.recent && data.recent.length > 0) {
+    const card = el('div', { class: 'card' }, [
+      el('h3', {}, ['我们最近发过的评论（扫描只认这些）']),
+      el('div', { class: 'hint', text: '如果你刚发的评论不在这里，说明它不是程序发的（预演/手打的不算），或者账本还没写入。' }),
+    ]);
+    const table = el('table');
+    table.appendChild(el('tr', {}, [el('th', {}, ['什么时候']), el('th', {}, ['视频']), el('th', {}, ['评论 rpid']), el('th', {}, ['状态'])]));
+    for (const row of data.recent.slice().reverse()) {
+      table.appendChild(
+        el('tr', {}, [
+          el('td', { class: 'mono' }, [row.at ? new Date(row.at).toLocaleString() : '—']),
+          el('td', { class: 'mono' }, [row.bvid]),
+          el('td', { class: 'mono' }, [row.rpid || '（没记录）']),
+          el('td', {}, [row.status + (row.aid ? '' : ' · 缺 aid')]),
+        ]),
+      );
+    }
+    card.appendChild(table);
+    panel.appendChild(card);
   }
 
   if (data.history && data.history.length > 0) {
@@ -886,13 +908,33 @@ async function rejectPending(id) {
 }
 
 async function scanPending() {
+  const box = $('#scan-result');
+  if (box) box.innerHTML = '扫描中…（会读我们最近 7 天发过的评论）';
   try {
     const res = await api('/api/pending/scan', { method: 'POST' });
     const created = Array.isArray(res.created) ? res.created.length : 0;
-    toast(created > 0 ? `新生成 ${created} 条待审` : '没有新的陌生人回复');
+    const details = Array.isArray(res.details) ? res.details : [];
+    const skipped = Array.isArray(res.skipped) ? res.skipped : [];
+    toast(created > 0 ? `新生成 ${created} 条待审` : '没有新的陌生人回复（下面有原因）');
+    if (box) {
+      box.innerHTML = '';
+      box.appendChild(
+        el('div', {
+          class: created > 0 ? 'issue info' : 'issue warn',
+          text: `我们最近的评论 ${res.considered ?? 0} 条，读了 ${res.scanned ?? 0} 条的回复，新增待审 ${created} 条`,
+        }),
+      );
+      for (const item of details) {
+        box.appendChild(
+          el('div', { class: 'issue info', text: `${item.bvid} · 评论 #${item.root} · 回复 ${item.replies} 条（别人 ${item.strangers} 条）· ${item.note}` }),
+        );
+      }
+      for (const line of skipped) box.appendChild(el('div', { class: 'issue warn', text: line }));
+    }
     await renderPending();
   } catch (err) {
     toast(String(err.message || err), true);
+    if (box) box.textContent = String(err.message || err);
   }
 }
 

@@ -39,17 +39,33 @@ export interface PendingDeps {
   draft?: (input: { source: string; uname: string; videoTitle: string; maxChars: number }) => Promise<string | null>;
 }
 
+export interface ScanDetail {
+  bvid: string;
+  root: string;
+  /** 这条评论下读到的回复总数。 */
+  replies: number;
+  /** 其中别人回给我们的条数。 */
+  strangers: number;
+  /** 这条为什么没生成草稿（没有就是空）。 */
+  note: string;
+}
+
 export interface ScanResult {
+  /** 账本里我们最近的评论数（满足时间/类型条件）。 */
+  considered: number;
+  /** 真的去读了楼中楼的评论数。 */
   scanned: number;
   created: PendingReply[];
   skipped: string[];
+  /** 每条评论的明细，面板直接展示（用户要知道「为什么没有」）。 */
+  details: ScanDetail[];
 }
 
 /** 扫我们发过的评论下的新回复，把陌生人的落成草稿（每轮最多 maxPerRound 条）。 */
 export async function scanStrangerReplies(deps: PendingDeps, options: { maxPerRound?: number } = {}): Promise<ScanResult> {
   const now = deps.now ?? (() => new Date());
   const cfg = deps.config;
-  const result: ScanResult = { scanned: 0, created: [], skipped: [] };
+  const result: ScanResult = { considered: 0, scanned: 0, created: [], skipped: [], details: [] };
 
   if (!cfg.listen.reply.strangerApproval) {
     result.skipped.push('配置里关了「陌生人回复走审批」，一律不回');
@@ -63,33 +79,80 @@ export async function scanStrangerReplies(deps: PendingDeps, options: { maxPerRo
   const cap = Math.max(1, options.maxPerRound ?? cfg.listen.reply.maxPerRound ?? 1);
   const selfMid = deps.secrets.selfMid();
 
-  // 只看最近 7 天我们发出去的评论
-  const cutoff = new Date(now().getTime() - 7 * 86_400_000).toISOString();
+  // 账本可能是别的进程（CLI）写的：先重读磁盘，否则会「看不见那条评论」
+  deps.quota.reload();
+
+  // 只看最近 7 天、我们自己发出去的评论（含未复核的；它们在 B 站上是真的存在）
+  const cutoffMs = now().getTime() - 7 * 86_400_000;
   const ours = deps.quota
     .entries()
-    .filter((entry) => entry.type === 'comment' && entry.rpid && entry.status !== 'failed' && entry.at >= cutoff)
+    .filter(
+      (entry) =>
+        entry.type === 'comment' &&
+        Boolean(entry.rpid) &&
+        entry.status !== 'failed' &&
+        entry.status !== 'dry_run' &&
+        Date.parse(entry.at) >= cutoffMs,
+    )
     .slice(-10);
+  result.considered = ours.length;
+
+  if (ours.length === 0) {
+    result.skipped.push('最近 7 天没有我们发出去的评论（预演不算；账本里没有 rpid 的也不算）');
+    return result;
+  }
 
   for (const entry of ours) {
     if (result.created.length >= cap) break;
     if (!entry.rpid) continue;
-    const aid = aidFromEntry(entry);
-    if (!aid) continue;
+
+    // aid 是写接口的 oid：账本里没有就查一次视频详情补上，不再静默跳过
+    let aid = aidFromEntry(entry);
+    if (!aid) {
+      const video = await deps.api.video(entry.bvid);
+      if (video.ok && video.data.aid > 0) {
+        aid = video.data.aid;
+        result.skipped.push(`${entry.bvid}：账本里缺 aid，已用视频详情补上（${aid}）`);
+      } else {
+        const reason = video.ok ? '视频详情里没有 aid' : video.error.message;
+        result.skipped.push(`${entry.bvid}：拿不到 aid（${reason}），跳过这条评论`);
+        result.details.push({ bvid: entry.bvid, root: entry.rpid, replies: 0, strangers: 0, note: `拿不到 aid：${reason}` });
+        continue;
+      }
+    }
+
     result.scanned += 1;
+    const detail: ScanDetail = { bvid: entry.bvid, root: entry.rpid, replies: 0, strangers: 0, note: '' };
 
     const thread = await deps.api.threadReplies(aid, entry.rpid);
     if (!thread.ok) {
-      result.skipped.push(`读 ${entry.bvid} 的回复失败：${thread.error.message}`);
+      detail.note = `读回复失败：${thread.error.message}`;
+      result.skipped.push(`${entry.bvid}：${detail.note}`);
+      result.details.push(detail);
       continue;
     }
+    detail.replies = thread.data.replies.length;
+
+    let blocked: string | null = null;
     for (const reply of thread.data.replies) {
       if (result.created.length >= cap) break;
       // 自己回自己的直接跳过：单账号下「主人」就是我们自己。
       // 「主人回复直发」（ownerDirect）要等 M4 有监听循环与双账号场景时才有意义。
       if (reply.mid === selfMid) continue;
-      if (deps.pending.has({ root: entry.rpid, parent: reply.rpid })) continue;
-      // 只回「直接回复到我们那条评论下面」的人（父级必须是我们），不参与别人的讨论
-      if (String(reply.parent) !== String(entry.rpid) && String(reply.root) !== String(entry.rpid)) continue;
+      detail.strangers += 1;
+
+      if (deps.pending.has({ root: entry.rpid, parent: reply.rpid })) {
+        blocked ??= `有人回了（${reply.uname}），但这条已经进过审批队列了`;
+        continue;
+      }
+      // 只回「直接回复到我们那条评论下面」的人（§7.8）：B 站的楼中楼里，root 永远是我们那条，
+      // 所以只有 parent === 我们的 rpid 才算「直接回我们」；回别人的回复不参与。
+      const isDirect = String(reply.parent) === String(entry.rpid);
+      const sameThread = !reply.root || String(reply.root) === String(entry.rpid);
+      if (!isDirect || !sameThread) {
+        blocked ??= `有 ${reply.uname} 的回复，但它挂在别人下面（parent=${reply.parent || '0'}，root=${reply.root || '0'}），不是直接回我们`;
+        continue;
+      }
 
       const draftText = await makeDraft(deps, {
         source: reply.message,
@@ -98,7 +161,7 @@ export async function scanStrangerReplies(deps: PendingDeps, options: { maxPerRo
         maxChars: cfg.listen.reply.maxChars,
       });
       if (!draftText) {
-        result.skipped.push(`给 ${reply.uname} 的回复没生成（模型没给）`);
+        blocked ??= `给 ${reply.uname} 的回复没生成（模型没给）`;
         continue;
       }
 
@@ -118,12 +181,26 @@ export async function scanStrangerReplies(deps: PendingDeps, options: { maxPerRo
       deps.replied.note({ mid: reply.mid, uname: reply.uname, bvid: entry.bvid, at: localIso(now()) });
       result.created.push(created);
     }
+
+    detail.note = blocked ?? (detail.replies === 0 ? '这条评论下还没有任何回复' : `回复 ${detail.replies} 条，都是我们自己发的`);
+    result.details.push(detail);
+    if (blocked) result.skipped.push(`${entry.bvid}：${blocked}`);
   }
 
   if (result.created.length > 0) {
     deps.logger.event('pending', `生成 ${result.created.length} 条待审回复`, {
       target: 'pending',
       data: { ids: result.created.map((item) => item.id) },
+    });
+  } else {
+    deps.logger.event('pending', '扫描了回复，但没有新的陌生人回复', {
+      target: 'pending',
+      level: 'info',
+      data: {
+        considered: result.considered,
+        scanned: result.scanned,
+        details: result.details.map((item) => ({ bvid: item.bvid, replies: item.replies, strangers: item.strangers, note: item.note })),
+      },
     });
   }
   return result;

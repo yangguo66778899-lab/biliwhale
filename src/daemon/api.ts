@@ -379,7 +379,22 @@ export function createHandlers(deps: PanelDeps): AllHandlers {
     /* ---------------- 待审（M3） ---------------- */
 
     pending() {
+      // 账本可能是 CLI 进程写的：重读一次，面板上的「我们发过的评论」才准
+      ctx.quota.reload();
       const items = ctx.pending.pending();
+      const cutoff = Date.now() - 7 * 86_400_000;
+      const recent = ctx.quota
+        .entries()
+        .filter((entry) => entry.type === 'comment' && Boolean(entry.rpid) && Date.parse(entry.at) >= cutoff)
+        .slice(-10)
+        .map((entry) => ({
+          bvid: entry.bvid,
+          rpid: entry.rpid ?? '',
+          at: entry.at,
+          status: entry.status,
+          share: entry.share,
+          aid: entry.aid ?? 0,
+        }));
       return {
         count: items.length,
         items: items.map((item) => ({
@@ -402,6 +417,8 @@ export function createHandlers(deps: PanelDeps): AllHandlers {
           .filter((item) => item.status !== 'pending')
           .slice(-20)
           .map((item) => ({ id: item.id, status: item.status, uname: item.target.uname, decidedAt: item.decidedAt ?? null, note: item.note ?? null })),
+        /** 账本里我们最近 7 天发过的评论（扫描只认这些）。 */
+        recent,
       };
     },
 

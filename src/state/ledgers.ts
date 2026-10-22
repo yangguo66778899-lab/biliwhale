@@ -161,6 +161,14 @@ export class QuotaLedger {
     return matched[0]?.at ?? null;
   }
 
+  /**
+   * 丢掉内存缓存、从磁盘重读。
+   * 用途：CLI 另起进程发过评论后，守护进程里的账本还是旧的，扫描回复会「看不见那条评论」。
+   */
+  reload(): void {
+    this.store.read();
+  }
+
   /** 幂等键查重：同样内容成功发过就不许再发。 */
   hasSentContent(key: string): boolean {
     return this.store.get().log.some((e) => e.status === 'sent' && e.note === key);
