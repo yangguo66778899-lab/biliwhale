@@ -5,6 +5,7 @@ import path from 'node:path';
 
 import { startDaemon } from '../src/daemon/index.ts';
 import { resolvePaths } from '../src/state/paths.ts';
+import { localDate } from '../src/shared/time.ts';
 import { tmpDir } from './helpers.ts';
 
 interface Ctx {
@@ -14,11 +15,24 @@ interface Ctx {
   dir: string;
 }
 
-async function withDaemon(fn: (ctx: Ctx) => Promise<void>): Promise<void> {
+async function withDaemon(fn: (ctx: Ctx) => Promise<void>, extraConfig: Record<string, unknown> = {}): Promise<void> {
   const dir = tmpDir('panel-api');
   fs.writeFileSync(
     path.join(dir, 'config.json'),
-    JSON.stringify({ version: 1, report: { level: 'brief' }, logging: { level: 'error' }, ui: { port: 0 } }, null, 2),
+    JSON.stringify(
+      {
+        version: 1,
+        report: { level: 'brief' },
+        logging: { level: 'error' },
+        // ui.port 要合法，这份配置才会被采纳（0 不在 1024–65535 里，整份会被判非法而回落默认值）
+        ui: { port: 8787 },
+        // 没有时间窗口 → 内核起来时的首个 tick 不会真的跑一轮（否则测试会在后台写报告，断言随时刻漂移）
+        schedule: { windows: [] },
+        ...extraConfig,
+      },
+      null,
+      2,
+    ),
     'utf8',
   );
   const started = await startDaemon({ dataDir: dir, port: 0, fixtures: true, version: 'test', tickMs: 3600_000, heartbeatMs: 3600_000 });
@@ -297,5 +311,222 @@ test('面板静态资源与状态页都能从内核取到（离线、无外链�
       const body = await res.text();
       assert.equal(/https?:\/\/(?!www\.w3\.org)/.test(body), false, `${file} 不该引用外部地址`);
     }
+  });
+});
+
+/* ---------------- P0-2：通知测试 ---------------- */
+
+test('通知测试：预演只写日志不真发；关写/关急停/没 CSRF 都拒绝（P0-2）', async () => {
+  await withDaemon(
+    async ({ base, auth, csrf, dir }) => {
+      const paths = resolvePaths({ dataDir: dir });
+      const notifyLog = (): string => {
+        try {
+          return fs.readFileSync(paths.notifyLog, 'utf8');
+        } catch {
+          return '';
+        }
+      };
+      const chatFile = path.join(paths.chatDir, 'owner.jsonl');
+      const testNotify = (body: unknown, headers = write(csrf, auth)) =>
+        fetch(`${base}/api/notify/test`, { method: 'POST', headers, body: JSON.stringify(body) });
+
+      assert.equal(notifyLog().includes('测试'), false, '一开始日志里不该有测试消息');
+
+      // 1) 预演 + 私信渠道：只写日志，不真发（也不往聊天记录里塞一条假消息）
+      const dry = await testNotify({ channel: 'dm' });
+      assert.equal(dry.status, 200);
+      const dryBody = (await dry.json()) as { ok: boolean; message: string; dryRun: boolean };
+      assert.equal(dryBody.ok, true);
+      assert.equal(dryBody.dryRun, true);
+      assert.match(dryBody.message, /预演/);
+      assert.match(dryBody.message, /没发私信/);
+      assert.match(notifyLog(), /测试/, '预演也要留下证据（只写日志）');
+      assert.equal(fs.existsSync(chatFile) ? fs.readFileSync(chatFile, 'utf8').includes('测试') : false, false, '预演不该写聊天记录');
+
+      // 2) 本机日志渠道：写进去就算成功
+      const file = await testNotify({ channel: 'file' });
+      assert.equal(file.status, 200);
+      assert.match(((await file.json()) as { message: string }).message, /本机日志/);
+
+      // 3) 写操作要 CSRF
+      const noCsrf = await fetch(`${base}/api/notify/test`, {
+        method: 'POST',
+        headers: { ...auth, 'content-type': 'application/json' },
+        body: JSON.stringify({ channel: 'dm' }),
+      });
+      assert.equal(noCsrf.status, 403);
+
+      // 4) 关掉总写开关 → 人话原因，且不再偷偷写日志/发东西
+      const before = notifyLog();
+      const saved = await fetch(`${base}/api/config`, {
+        method: 'PUT',
+        headers: write(csrf, auth),
+        body: JSON.stringify({ safety: { writeEnabled: false } }),
+      });
+      assert.equal(saved.status, 200);
+      const denied = await testNotify({ channel: 'dm' });
+      assert.equal(denied.status, 409);
+      const deniedBody = (await denied.json()) as { ok: boolean; message: string };
+      assert.equal(deniedBody.ok, false);
+      assert.match(deniedBody.message, /写操作关着/);
+      assert.equal(notifyLog(), before, '被拒绝时不许偷偷发/写');
+
+      // 5) 急停 → 也不发
+      await fetch(`${base}/api/config`, {
+        method: 'PUT',
+        headers: write(csrf, auth),
+        body: JSON.stringify({ safety: { writeEnabled: true, killSwitch: true } }),
+      });
+      const killed = await testNotify({ channel: 'dm' });
+      assert.equal(killed.status, 409);
+      assert.match(((await killed.json()) as { message: string }).message, /急停/);
+    },
+    {
+      safety: { dryRun: true },
+      account: { ownerMid: 42 },
+      notify: { channels: [{ type: 'dm', enabled: true }, { type: 'file', enabled: true }] },
+    },
+  );
+});
+
+/* ---------------- P0-3：发动态 / 删自己的评论 ---------------- */
+
+test('发动态：开关关着拒绝、预演只出计划、没二次确认也拒绝（服务端再判一次）（P0-3）', async () => {
+  await withDaemon(async ({ base, auth, csrf }) => {
+    const post = (body: unknown) =>
+      fetch(`${base}/api/dynamic`, { method: 'POST', headers: write(csrf, auth), body: JSON.stringify(body) });
+
+    const off = await post({ text: '今天看了个好东西', confirm: true });
+    assert.equal(off.status, 409);
+    assert.match(((await off.json()) as { message: string }).message, /动态开关关着/);
+
+    // 打开动态 + 一律预演：返回计划，不真的发
+    const saved = await fetch(`${base}/api/config`, {
+      method: 'PUT',
+      headers: write(csrf, auth),
+      body: JSON.stringify({ dynamic: { enabled: true, requireConfirm: true, dailyCap: 1 }, safety: { dryRun: true } }),
+    });
+    assert.equal(saved.status, 200);
+
+    const dry = await post({ text: '今天看了个好东西', confirm: true });
+    assert.equal(dry.status, 200);
+    const dryBody = (await dry.json()) as { ok: boolean; message: string; status: string };
+    assert.equal(dryBody.ok, true);
+    assert.equal(dryBody.status, 'dry_run', '预演下只能是 dry_run');
+    assert.match(dryBody.message, /预演/);
+
+    // 前端不传 confirm 时服务端也要拒（不能只靠前端）
+    const noConfirm = await post({ text: '今天看了个好东西', confirm: false });
+    assert.equal(noConfirm.status, 409);
+    assert.match(((await noConfirm.json()) as { message: string }).message, /二次确认/);
+
+    // 空文案：连计划都不给
+    const empty = await post({ text: '   ', confirm: true });
+    assert.equal(empty.status, 400);
+  });
+});
+
+test('挑中的视频：从今天的报告里解析 bvid/标题/一句话/链接（P0-3 发动态入口的数据）', async () => {
+  await withDaemon(async ({ base, auth, dir }) => {
+    const paths = resolvePaths({ dataDir: dir });
+    fs.mkdirSync(paths.reportsDir, { recursive: true });
+    const date = localDate();
+    fs.writeFileSync(
+      path.join(paths.reportsDir, `${date}.md`),
+      [
+        '# 报告',
+        '',
+        '### 挑中的',
+        '',
+        '#### BV1pick00001 · 一条视频',
+        '- 分数：15/20',
+        '- 为什么值得：有信息量',
+        '- 一句话：这条值得看',
+        '',
+        '#### BV1pick00002 · 另一条',
+        '- 一句话：也挺好',
+        '',
+        '### 看过的（跳过）',
+        '',
+        '- BV1skip00001 · 跳过的那条 · 分数不够',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const res = await fetch(`${base}/api/picked`, { headers: auth });
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as {
+      ok: boolean;
+      date: string;
+      items: Array<{ bvid: string; title: string; oneliner: string; url: string }>;
+    };
+    assert.equal(body.date, date);
+    assert.equal(body.items.length, 2, '只算「挑中的」，跳过的不算');
+    assert.equal(body.items[0]?.bvid, 'BV1pick00001');
+    assert.equal(body.items[0]?.title, '一条视频');
+    assert.equal(body.items[0]?.oneliner, '这条值得看');
+    assert.match(body.items[0]?.url ?? '', /^https:\/\/www\.bilibili\.com\/video\/BV1pick00001$/);
+
+    // 不存在的日期：空列表（面板显示「没有挑中的」，不是报错）
+    const missing = await fetch(`${base}/api/picked?date=2000-01-01`, { headers: auth });
+    assert.equal(missing.status, 200);
+    assert.deepEqual(((await missing.json()) as { items: unknown[] }).items, []);
+
+    // 日期格式不对：400
+    assert.equal((await fetch(`${base}/api/picked?date=yesterday`, { headers: auth })).status, 400);
+  });
+});
+
+test('删自己的评论：不在账本里就拒绝；在账本里且预演时只出计划（P0-3）', async () => {
+  await withDaemon(async ({ base, auth, csrf, dir }) => {
+    const del = (bvid: string, rpid: string) =>
+      fetch(`${base}/api/comments/${bvid}/${rpid}`, { method: 'DELETE', headers: write(csrf, auth) });
+
+    const missing = await del('BV1notours01', '123');
+    assert.equal(missing.status, 409);
+    assert.match(((await missing.json()) as { message: string }).message, /账本里没有这条评论/);
+
+    // 账本里补一条我们发过的评论（type=comment 才算）
+    const paths = resolvePaths({ dataDir: dir });
+    fs.writeFileSync(
+      paths.quota,
+      JSON.stringify(
+        {
+          version: 1,
+          shareDaily: 3,
+          log: [
+            {
+              at: new Date().toISOString(),
+              type: 'comment',
+              bvid: 'BV1lead00001',
+              aid: 9001,
+              target: 'owner',
+              rpid: '778899',
+              share: true,
+              status: 'sent',
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    );
+    // /api/pending 会重读账本（面板上的「我们发过的评论」就是它），借它把磁盘上的新行读进内存
+    await fetch(`${base}/api/pending`, { headers: auth });
+
+    await fetch(`${base}/api/config`, {
+      method: 'PUT',
+      headers: write(csrf, auth),
+      body: JSON.stringify({ safety: { dryRun: true } }),
+    });
+
+    const dry = await del('BV1lead00001', '778899');
+    assert.equal(dry.status, 200);
+    const dryBody = (await dry.json()) as { ok: boolean; message: string };
+    assert.equal(dryBody.ok, true);
+    assert.match(dryBody.message, /预演/, '预演下只出计划并在结果里标出来');
   });
 });

@@ -287,6 +287,26 @@ async function renderOverview(options = {}) {
 
   panel.appendChild(head);
 
+  // 「本轮挑中」：今天报告里挑中的视频；每条旁边一个「发动态…」入口（P0-3）
+  const picked = await api('/api/picked').catch(() => null);
+  const pickedItemsToday = pickedItems(picked);
+  const pickedCard = el('div', { class: 'card' }, [el('h3', {}, ['本轮挑中'])]);
+  if (pickedItemsToday.length === 0) {
+    pickedCard.appendChild(el('div', { class: 'hint', text: '今天还没挑出视频：跑一轮之后这里会出现（每条旁边有「发动态…」）。' }));
+  }
+  for (const item of pickedItemsToday) {
+    pickedCard.appendChild(
+      el('div', { class: 'picked-row' }, [
+        el('div', {}, [
+          el('div', { text: item.title || item.bvid }),
+          el('div', { class: 'mono hint', text: `${item.bvid}${item.oneliner ? ` · ${item.oneliner}` : ''}` }),
+        ]),
+        renderDynamicButton(item),
+      ]),
+    );
+  }
+  panel.appendChild(pickedCard);
+
   if (status.warnings && status.warnings.length > 0) {
     const warn = el('div', { class: 'card' }, [el('h3', {}, ['需要注意'])]);
     for (const text of status.warnings) warn.appendChild(el('div', { class: 'issue warn', text }));
@@ -369,6 +389,11 @@ async function renderSettings() {
   );
 
   for (const group of data.groups) {
+    // 通知组用自己的画法：主界面只露「B 站私信 / 本机日志」，另外两个折进「高级」
+    if (group.key === 'notify') {
+      panel.appendChild(renderNotifyCard(group, data));
+      continue;
+    }
     const card = el('div', { class: 'card' }, [el('h2', {}, [group.label]), group.desc ? el('div', { class: 'hint', text: group.desc }) : null]);
     for (const field of group.fields) {
       // 值为 undefined 时回落到 schema 默认值：读路径写错时也不会显示成「空/未勾选」
@@ -403,7 +428,9 @@ function renderField(field, value, onChange) {
   if (field.widget === 'enum') {
     const select = el('select');
     for (const option of field.values || []) {
-      const opt = el('option', { value: option }, [option]);
+      // 只显示中文名；写回配置的仍是英文枚举（field.valueLabels 由 config/spec.ts 提供）
+      const text = (field.valueLabels && field.valueLabels[option]) || option;
+      const opt = el('option', { value: option }, [text]);
       if (option === value) opt.selected = true;
       select.appendChild(opt);
     }
@@ -493,6 +520,414 @@ function renderObjectList(field, list, onChange) {
   };
   draw();
   return box;
+}
+
+/* ---------------- 通知（主界面只露两个渠道 + 发条测试） ---------------- */
+
+/**
+ * 面板主界面只露这两个渠道（P0-2）。
+ *
+ * 为什么：以前把 `file / webhook / command / dm / format / template / sendSummary` 全摆出来，
+ * 用户不知道该选哪个，干脆没测。webhook / command 的能力没删，只是折进「高级（一般不用改）」，
+ * 默认折叠、展开才渲染（所以页面源码里看不到那几个英文词）。
+ */
+const NOTIFY_MAIN = [
+  { type: 'dm', title: 'B 站私信', desc: '把结果发到你的 B 站私信（最常用）' },
+  { type: 'file', title: '本机日志', desc: '写在程序目录的日志里，不打扰你' },
+];
+
+function notifyChannelDefaults(type) {
+  return {
+    type,
+    enabled: false,
+    path: '',
+    url: '',
+    format: 'generic',
+    template: 'text',
+    cmd: '',
+    args: '',
+    sendSummary: true,
+    sendDiary: false,
+    sendVideoInfo: false,
+  };
+}
+
+/** 确保 config.notify 的形状存在（面板第一次打开时 config 可能是旧文件）。 */
+function ensureNotifyConfig(config) {
+  if (!config.notify || typeof config.notify !== 'object') config.notify = {};
+  if (!Array.isArray(config.notify.channels)) config.notify.channels = [];
+  if (!config.notify.quietHours || typeof config.notify.quietHours !== 'object') {
+    config.notify.quietHours = { enabled: false, start: '23:00', end: '08:00' };
+  }
+  return config.notify;
+}
+
+function ensureNotifyChannel(config, type) {
+  const channels = ensureNotifyConfig(config).channels;
+  const found = channels.find((item) => item && item.type === type);
+  if (found) return found;
+  const entry = notifyChannelDefaults(type);
+  channels.push(entry);
+  return entry;
+}
+
+/** 从 /api/config 的元数据里取某个渠道字段的中文说明（不在面板里硬抄一份）。 */
+function notifyFieldMeta(key) {
+  const groups = (state.config && state.config.groups) || [];
+  const group = groups.find((item) => item.key === 'notify');
+  const channels = group && (group.fields || []).find((item) => item.path === 'notify.channels');
+  const fields = (channels && channels.item && channels.item.fields) || [];
+  return fields.find((field) => field.relPath === key) || null;
+}
+
+function copyText(text) {
+  const fallback = () => {
+    // 剪贴板接口被浏览器拒绝时：把例子塞进一个临时输入框并选中，让用户自己按 Ctrl+C
+    try {
+      const area = el('textarea');
+      area.value = text;
+      document.body.appendChild(area);
+      if (typeof area.select === 'function') area.select();
+      if (typeof document.execCommand === 'function') document.execCommand('copy');
+      area.remove();
+      toast('已复制');
+    } catch {
+      toast(`复制不了，手动抄一下：${text}`, true);
+    }
+  };
+  if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+    navigator.clipboard.writeText(text).then(() => toast('已复制'), fallback);
+    return;
+  }
+  fallback();
+}
+
+async function testNotifyChannel(type, box) {
+  if (box) box.textContent = '正在发一条测试…（最多等十几秒）';
+  try {
+    const res = await api('/api/notify/test', { method: 'POST', body: { channel: type } });
+    const text = res.message || (res.ok ? '发出去了' : '没发出去');
+    if (box) box.textContent = text;
+    toast(text, !res.ok);
+  } catch (err) {
+    const text = String(err.message || err);
+    if (box) box.textContent = text;
+    toast(text, true);
+  }
+}
+
+function renderNotifyChannel(config, spec) {
+  const current = () => {
+    const channels = ensureNotifyConfig(config).channels;
+    return channels.find((item) => item && item.type === spec.type) || null;
+  };
+  const tag = el('span', { class: 'tag' });
+  const refresh = () => {
+    const entry = current();
+    const on = Boolean(entry && entry.enabled);
+    tag.textContent = on ? '已打开' : '关着';
+    tag.className = on ? 'tag on' : 'tag';
+  };
+  refresh();
+
+  const card = el('div', { class: 'sub-card' }, [
+    el('div', { class: 'row' }, [el('b', { text: spec.title }), tag]),
+    el('div', { class: 'hint', text: spec.desc }),
+  ]);
+  card.setAttribute('data-channel', spec.type);
+
+  const box = el('input', { type: 'checkbox' });
+  box.checked = Boolean(current() && current().enabled);
+  box.setAttribute('data-field', `notify.channels.${spec.type}.enabled`);
+  box.addEventListener('change', () => {
+    const entry = box.checked ? ensureNotifyChannel(config, spec.type) : current();
+    if (entry) entry.enabled = box.checked;
+    refresh();
+  });
+  card.appendChild(el('label', { class: 'inline' }, [box, '开着']));
+
+  if (spec.type === 'dm') {
+    const extras = el('div', { class: 'sub-fields' }, [el('div', { class: 'hint', text: '私信里发什么（上面「开着」才有效）：' })]);
+    for (const [key, text] of [
+      ['sendSummary', '发本轮摘要'],
+      ['sendDiary', '发今天的公开日记'],
+      ['sendVideoInfo', '发视频信息块'],
+    ]) {
+      const input = el('input', { type: 'checkbox' });
+      const entry = current();
+      input.checked = entry ? Boolean(entry[key]) : key === 'sendSummary';
+      input.setAttribute('data-field', `notify.channels.dm.${key}`);
+      input.addEventListener('change', () => {
+        ensureNotifyChannel(config, 'dm')[key] = input.checked;
+      });
+      extras.appendChild(el('label', { class: 'inline' }, [input, text]));
+    }
+    card.appendChild(extras);
+  }
+
+  const result = el('div', { class: 'hint test-result', text: '' });
+  card.appendChild(
+    el('div', { class: 'actions' }, [el('button', { onClick: () => testNotifyChannel(spec.type, result) }, ['发条测试'])]),
+  );
+  card.appendChild(result);
+  return card;
+}
+
+function renderAdvancedField(config, type, key, fallback) {
+  const meta = notifyFieldMeta(key) || {};
+  const wrap = el('div', { class: 'field' });
+  wrap.setAttribute('data-field', `notify.channels.${type}.${key}`);
+  wrap.appendChild(el('label', { text: meta.label || fallback.label }));
+  const entry = () => ensureNotifyChannel(config, type);
+
+  if (meta.widget === 'enum') {
+    const select = el('select');
+    for (const value of meta.values || []) {
+      const text = (meta.valueLabels && meta.valueLabels[value]) || value;
+      const opt = el('option', { value }, [text]);
+      if ((entry()[key] || meta.default) === value) opt.selected = true;
+      select.appendChild(opt);
+    }
+    select.addEventListener('change', () => {
+      entry()[key] = select.value;
+    });
+    wrap.appendChild(select);
+  } else {
+    const input = el('input', { type: 'text' });
+    input.value = String(entry()[key] || meta.default || '');
+    input.addEventListener('change', () => {
+      entry()[key] = input.value;
+    });
+    wrap.appendChild(input);
+  }
+
+  const hint = meta.desc || fallback.hint;
+  if (hint) wrap.appendChild(el('div', { class: 'hint', text: hint }));
+  if (fallback.example) {
+    wrap.appendChild(
+      el('div', { class: 'example' }, [
+        el('code', { text: fallback.example }),
+        el('button', { class: 'mini', onClick: () => copyText(fallback.example) }, ['复制']),
+      ]),
+    );
+  }
+  return wrap;
+}
+
+function renderAdvancedChannel(config, spec) {
+  const current = () => ensureNotifyChannel(config, spec.type);
+  const card = el('div', { class: 'sub-card' }, [
+    el('div', { class: 'row' }, [el('b', { text: spec.title })]),
+    el('div', { class: 'hint', text: spec.desc }),
+  ]);
+  card.setAttribute('data-channel', spec.type);
+
+  const box = el('input', { type: 'checkbox' });
+  box.checked = Boolean(current().enabled);
+  box.setAttribute('data-field', `notify.channels.${spec.type}.enabled`);
+  box.addEventListener('change', () => {
+    current().enabled = box.checked;
+  });
+  card.appendChild(el('label', { class: 'inline' }, [box, '开着']));
+  for (const field of spec.fields) card.appendChild(renderAdvancedField(config, spec.type, field.key, field));
+
+  const result = el('div', { class: 'hint test-result', text: '' });
+  card.appendChild(
+    el('div', { class: 'actions' }, [el('button', { onClick: () => testNotifyChannel(spec.type, result) }, ['发条测试'])]),
+  );
+  card.appendChild(result);
+  return card;
+}
+
+function renderNotifyAdvanced(config) {
+  const details = el('details', { class: 'sub-card advanced' });
+  const summary = el('summary', {}, ['高级（一般不用改）']);
+  details.appendChild(summary);
+  const examples = (state.config && state.config.examples) || {};
+  let built = false;
+  const build = () => {
+    if (built) return;
+    built = true;
+    details.appendChild(
+      el('div', {
+        class: 'hint',
+        text: '这两个给会折腾的人用：填错不会有提示，不确定就留在上面的「本机日志」。能力没删，只是默认收起来。',
+      }),
+    );
+    details.appendChild(
+      renderAdvancedChannel(config, {
+        type: 'webhook',
+        title: '自定义地址推送',
+        desc: '把一段 JSON 推到你自己搭的地址（飞书 / 钉钉 / 企微群机器人、自建服务都行）。',
+        fields: [
+          {
+            key: 'url',
+            label: '地址',
+            hint: '机器人给你的那条完整链接，整条粘进来',
+            example: examples.webhookUrl || '',
+          },
+          { key: 'format', label: '对方是哪家服务', hint: '不确定就选「通用」：只发一个 text 字段' },
+          { key: 'template', label: '消息格式', hint: '纯文本最稳；富文本要对方支持' },
+        ],
+      }),
+    );
+    details.appendChild(
+      renderAdvancedChannel(config, {
+        type: 'command',
+        title: '本地命令',
+        desc: '跑完一轮后执行一个本机程序，消息放在环境变量里传给它。',
+        fields: [
+          {
+            key: 'cmd',
+            label: '要执行的命令',
+            hint: '程序名或完整路径；不走 shell',
+            example: examples.command || '',
+          },
+          {
+            key: 'args',
+            label: '命令参数',
+            hint: '空格分隔；消息内容不放在这里，程序从环境变量 BILIWHALE_NOTIFY_TEXT 读',
+            example: examples.commandArgs || '',
+          },
+        ],
+      }),
+    );
+  };
+  details.addEventListener('toggle', build);
+  summary.addEventListener('click', build);
+  return details;
+}
+
+function renderNotifyCard(group, data) {
+  ensureNotifyConfig(data.config);
+  const card = el('div', { class: 'card' }, [
+    el('h2', {}, [group.label || '通知']),
+    el('div', {
+      class: 'hint',
+      text: '跑完一轮之后，结果发到哪里。只开你要的那个就行；拿不准就点「发条测试」，它会立刻试一次（现在就去试，不用等下一轮）。',
+    }),
+  ]);
+  for (const spec of NOTIFY_MAIN) card.appendChild(renderNotifyChannel(data.config, spec));
+
+  // 静默时段：不是渠道，但有话直说（只在日志里记）
+  const quietField = (group.fields || []).find((item) => item.path === 'notify.quietHours');
+  if (quietField) {
+    const quiet = el('div', { class: 'sub-card' }, [el('b', { text: '夜里别吵我' })]);
+    const value = valueAt(data.config, 'notify.quietHours');
+    // 组里的 desc 由 renderField 自己带出来，这里不再重复一遍
+    quiet.appendChild(
+      renderField(quietField, value === undefined ? quietField.default : value, (next) => setValueAt(data.config, 'notify.quietHours', next)),
+    );
+    card.appendChild(quiet);
+  }
+
+  card.appendChild(renderNotifyAdvanced(data.config));
+  return card;
+}
+
+/* ---------------- 挑中的视频（发动态入口按它列） ---------------- */
+
+function pickedItems(data) {
+  return (data && Array.isArray(data.items) ? data.items : []).filter((item) => item && item.bvid);
+}
+
+/** 「发动态…」按钮交给外面（概览与报告页各有一处）。 */
+function renderDynamicButton(item, label = '发动态…') {
+  return el('button', { class: 'mini', onClick: () => openDynamicDialog(dynamicDraft(item)) }, [label]);
+}
+
+function dynamicDraft(item) {
+  const head = item.oneliner || item.title || '';
+  const lines = [head];
+  if (item.oneliner && item.title) lines.push(`《${item.title}》`);
+  // 视频地址由服务端给出（面板不许自己拼外部地址：离线可用 + 不变式测试）
+  if (item.url) lines.push(item.url);
+  return lines.filter((line) => String(line || '').trim().length > 0).join('\n');
+}
+
+function openDynamicDialog(defaultText) {
+  const area = el('textarea', { rows: '7' });
+  area.value = defaultText;
+  const status = el('div', { class: 'hint', text: '' });
+  const mask = el('div', { class: 'modal-mask' });
+  const dryHint =
+    state.status && state.status.safety && state.status.safety.dryRun
+      ? el('div', { class: 'issue warn', text: '现在是一律预演：点「确认发出去」也只会打印，不会真的发。' })
+      : null;
+  const card = el('div', { class: 'modal' }, [
+    el('h3', {}, ['发一条动态']),
+    el('div', {
+      class: 'hint',
+      text: '发出去只能整条删掉，改不了。文案可以直接改；不想要哪一行就删掉。',
+    }),
+    dryHint,
+    area,
+    status,
+    el('div', { class: 'actions' }, [
+      el('button', { class: 'primary', onClick: () => sendDynamic(area.value, status, mask) }, ['确认发出去']),
+      el('button', { onClick: () => mask.remove() }, ['算了']),
+    ]),
+  ]);
+  mask.appendChild(card);
+  document.body.appendChild(mask);
+  return mask;
+}
+
+async function sendDynamic(text, statusBox, mask) {
+  const clean = String(text || '').trim();
+  if (!clean) {
+    toast('文案是空的：先写一句再发', true);
+    return;
+  }
+  if (statusBox) statusBox.textContent = '正在发…';
+  try {
+    const res = await api('/api/dynamic', { method: 'POST', body: { text: clean, confirm: true } });
+    const message = res.message || (res.ok ? '发出去了' : '没发出去');
+    toast(message, !res.ok);
+    if (statusBox) statusBox.textContent = message;
+    if (res.ok) mask.remove();
+  } catch (err) {
+    const message = String(err.message || err);
+    if (statusBox) statusBox.textContent = message;
+    toast(message, true);
+  }
+}
+
+/* ---------------- 删自己的评论（账本旁，输入「删除」才可点） ---------------- */
+
+function renderDeleteComment(bvid, rpid) {
+  const box = el('div', { class: 'inline' }, [
+    el('button', { class: 'mini danger', onClick: () => box.appendChild(buildDeleteConfirm(bvid, rpid)) }, ['删除…']),
+  ]);
+  return box;
+}
+
+function buildDeleteConfirm(bvid, rpid) {
+  const input = el('input', { type: 'text', placeholder: '输入「删除」两个字' });
+  const confirm = el('button', { class: 'danger' }, ['确认删除']);
+  confirm.disabled = true;
+  input.addEventListener('input', () => {
+    confirm.disabled = input.value.trim() !== '删除';
+  });
+  confirm.addEventListener('click', () => {
+    if (input.value.trim() !== '删除') return;
+    deleteCommentNow(bvid, rpid);
+  });
+  return el('div', { class: 'confirm-delete' }, [
+    el('div', { class: 'hint', text: `删掉自己在 ${bvid} 下的这条评论？（B 站那边会真的消失，不能撤回）` }),
+    input,
+    confirm,
+  ]);
+}
+
+async function deleteCommentNow(bvid, rpid) {
+  try {
+    const res = await api(`/api/comments/${encodeURIComponent(bvid)}/${encodeURIComponent(rpid)}`, { method: 'DELETE' });
+    toast(res.message || (res.ok ? '已删除' : '没删'), !res.ok);
+    await renderPending();
+  } catch (err) {
+    toast(String(err.message || err), true);
+  }
 }
 
 function valueAt(root, path) {
@@ -840,6 +1275,7 @@ async function renderReports() {
   }
   panel.appendChild(el('div', { class: 'card' }, [list]));
   panel.appendChild(preview);
+  panel.appendChild(el('div', { class: 'card', id: 'report-picked' }));
   await openReport(data.items[0].date);
 }
 
@@ -847,6 +1283,22 @@ async function openReport(date) {
   const doc = await api(`/api/reports/${encodeURIComponent(date)}`);
   const preview = $('#report-preview');
   if (preview) preview.innerHTML = renderMarkdown(doc.markdown);
+
+  // 报告里挑中的视频：在内容后面给「发动态…」小入口（P0-3：报告页对应记录旁）
+  const box = $('#report-picked');
+  if (!box) return;
+  box.innerHTML = '';
+  const picked = await api(`/api/picked?date=${encodeURIComponent(date)}`).catch(() => null);
+  const items = pickedItems(picked);
+  box.appendChild(el('div', { class: 'hint', text: items.length > 0 ? '这一份报告里挑中的视频（想发动态就直接点）：' : '这一份报告里没有挑中的视频。' }));
+  for (const item of items) {
+    box.appendChild(
+      el('div', { class: 'picked-row' }, [
+        el('div', {}, [el('div', { text: item.title || item.bvid }), el('div', { class: 'mono hint', text: item.bvid })]),
+        renderDynamicButton(item),
+      ]),
+    );
+  }
 }
 
 /* ---------------- 日记 ---------------- */
@@ -949,14 +1401,26 @@ async function renderPending() {
       el('div', { class: 'hint', text: '如果你刚发的评论不在这里，说明它不是程序发的（预演/手打的不算），或者账本还没写入。' }),
     ]);
     const table = el('table');
-    table.appendChild(el('tr', {}, [el('th', {}, ['什么时候']), el('th', {}, ['视频']), el('th', {}, ['评论 rpid']), el('th', {}, ['状态'])]));
+    table.appendChild(
+      el('tr', {}, [
+        el('th', {}, ['什么时候']),
+        el('th', {}, ['视频']),
+        el('th', {}, ['评论 rpid']),
+        el('th', {}, ['状态']),
+        el('th', {}, ['操作']),
+      ]),
+    );
     for (const row of data.recent.slice().reverse()) {
+      const action = el('td');
+      if (row.rpid) action.appendChild(renderDeleteComment(row.bvid, row.rpid));
+      else action.appendChild(el('span', { class: 'hint', text: '（没记录 rpid）' }));
       table.appendChild(
         el('tr', {}, [
           el('td', { class: 'mono' }, [row.at ? new Date(row.at).toLocaleString() : '—']),
           el('td', { class: 'mono' }, [row.bvid]),
           el('td', { class: 'mono' }, [row.rpid || '（没记录）']),
           el('td', {}, [row.status + (row.aid ? '' : ' · 缺 aid')]),
+          action,
         ]),
       );
     }

@@ -21,8 +21,10 @@ export interface FieldDescribe {
   desc?: string;
   widget: FieldWidget;
   kind: FieldSpec['kind'];
-  /** 枚举取值（widget=enum）。 */
+  /** 枚举取值（widget=enum）。值本身是配置里真正用的英文枚举。 */
   values?: readonly string[];
+  /** 枚举取值的中文显示名（面板只显示这个，不把英文枚举摆到用户面前）。 */
+  valueLabels?: Readonly<Record<string, string>>;
   min?: number;
   max?: number;
   int?: boolean;
@@ -87,6 +89,7 @@ function describeField(spec: FieldSpec, absPath: string, relPath: string): Field
       break;
     case 'enum':
       base.values = spec.values;
+      if (spec.valueLabels) base.valueLabels = spec.valueLabels;
       break;
     case 'array':
       if (spec.maxItems !== undefined) base.maxItems = spec.maxItems;

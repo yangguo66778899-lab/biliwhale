@@ -190,3 +190,48 @@ details.card[open] > summary { margin-bottom: 8px; }
 
 .item-card { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin: 8px 0; }
 .item-card .item-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+
+/* ---- 通知渠道（P0-2）：主界面两个渠道 + 折叠的高级区 ---- */
+.sub-card { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin: 10px 0; }
+.sub-fields { margin-top: 4px; }
+.tag {
+  font-size: 12px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 8px;
+  white-space: nowrap;
+}
+.tag.on { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
+details.advanced > summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+details.advanced[open] > summary { margin-bottom: 6px; }
+.example { display: flex; gap: 8px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
+.example code { background: var(--code); padding: 2px 6px; border-radius: 6px; font-size: 12px; word-break: break-all; }
+.test-result:empty { display: none; }
+
+/* ---- 挑中的视频 / 发动态 / 删评论（P0-3） ---- */
+button.mini { padding: 3px 9px; font-size: 12px; border-radius: 7px; }
+.picked-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.picked-row:last-child { border-bottom: none; }
+
+.modal-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(0, 0, 0, .45);
+}
+.modal {
+  width: min(520px, 100%);
+  max-height: 86vh;
+  overflow: auto;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px 16px;
+}
+.confirm-delete { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
+.confirm-delete .hint { width: 100%; }

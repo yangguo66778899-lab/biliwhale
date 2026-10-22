@@ -17,6 +17,15 @@ import type { Config } from '../config/spec.ts';
 import type { NotifyChannel } from '../config/spec.ts';
 import type { Logger } from '../shared/logger.ts';
 
+/** 面板「高级」区要展示的可复制例子（放在服务端：面板自己不许出现外部地址）。 */
+export const NOTIFY_EXAMPLES = {
+  /** 飞书群机器人的地址形状（示例，不是真地址）。 */
+  webhookUrl: 'https://open.feishu.cn/open-apis/bot/v2/hook/1a2b3c4d-5e6f-7890-abcd-ef1234567890',
+  /** 一个「把自己弹出来」的小程序可以这么填（示例路径）。 */
+  command: 'C:\\Tools\\notify.exe',
+  commandArgs: '--title BiliWhale',
+} as const;
+
 export interface NotifyInput {
   text: string;
   /** 本地时间；用来判断静默时段。 */

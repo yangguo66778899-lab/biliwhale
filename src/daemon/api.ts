@@ -30,6 +30,9 @@ import { discoverModel, keyFingerprint } from '../llm/discovery.ts';
 import { SPEC } from '../config/spec.ts';
 import type { ObjectSpec } from '../config/spec.ts';
 import { deleteOwnComment, sendManualDm } from '../orchestrator/manual.ts';
+import { publishDynamic as publishDynamicNow } from '../orchestrator/like.ts';
+import { appendNotifyLog, videoUrl } from '../orchestrator/writers.ts';
+import { NOTIFY_EXAMPLES, dispatchNotifications } from '../notify/index.ts';
 import { createBackup } from '../backup.ts';
 import { checkUpdate } from '../update.ts';
 import { runDoctor } from '../doctor.ts';
@@ -154,6 +157,7 @@ export function createHandlers(deps: PanelDeps): AllHandlers {
         },
         account: { loggedIn: account.hasCookie, ...(account.uname ? { name: account.uname } : {}), ...(account.mid ? { mid: account.mid } : {}) },
         model: { configured: ctx.configuredModel, actual: ctx.llm.model, discoveredAt: state.modelCache?.discoveredAt ?? null },
+        safety: { writeEnabled: cfg.safety.writeEnabled, dryRun: cfg.safety.dryRun, killSwitch: cfg.safety.killSwitch },
         pending: { count: ctx.pending.count() },
         warnings,
       };
@@ -202,7 +206,14 @@ export function createHandlers(deps: PanelDeps): AllHandlers {
     /* ---------------- 配置 ---------------- */
 
     config() {
-      return { config: ctx.config.exportForUser(), groups: describeConfig(), issues: ctx.config.getIssues(), defaults: buildDefaults() };
+      return {
+        config: ctx.config.exportForUser(),
+        groups: describeConfig(),
+        issues: ctx.config.getIssues(),
+        defaults: buildDefaults(),
+        // 面板要展示的可复制例子放在服务端：面板自己不许出现外部地址（离线可用 + 不变式测试）
+        examples: NOTIFY_EXAMPLES,
+      };
     },
 
     async saveConfig(patch: unknown) {
@@ -564,11 +575,157 @@ export function createHandlers(deps: PanelDeps): AllHandlers {
     },
 
     async deleteComment(bvid: string, rpid: string, dryRun = false) {
+      // 预演判定在服务端做一次：面板传不传 dryRun 都不能让「一律预演」失效
+      const effective = dryRun || ctx.config.get().safety.dryRun;
       return deleteOwnComment(
         { logger: ctx.logger, config: ctx.config.get(), quota: ctx.quota, state: ctx.state, writer: ctx.writer },
         { bvid, rpid },
-        { dryRun },
+        { dryRun: effective },
       );
+    },
+
+    /* ---------------- 通知测试 / 发动态（P0-2 / P0-3） ---------------- */
+
+    /**
+     * 「发条测试」：真的走一遍通知渠道，只发一条测试文本。
+     *
+     * 口径（用户 2026-10-22 确认）：
+     *   - 预演（safety.dryRun）下允许测，但只写日志/只打印，不真的发私信；
+     *   - 总写开关关着 / 急停 / 风控冷却时一律不发，直接回人话原因；
+     *   - 不伪造成功：每个渠道的成败都照实返回。
+     */
+    async notifyTest(body: { channel?: string } = {}) {
+      const cfg = ctx.config.get();
+      const now = new Date();
+      const denied: string[] = [];
+      if (!cfg.safety.writeEnabled) denied.push('写操作关着（设置 → 安全 → 打开「总写开关」）');
+      if (cfg.safety.killSwitch) denied.push('急停开着（设置 → 安全 → 关掉「急停」）');
+      if (ctx.state.inRiskCooldown(now)) denied.push('撞过风控，还在冷却期');
+      if (denied.length > 0) {
+        return { ok: false, message: `${denied.join('；')}：这时候不发测试（它也要真的发东西）`, results: [], dryRun: cfg.safety.dryRun };
+      }
+
+      const wanted = String(body?.channel ?? '').trim();
+      if (wanted && !['file', 'dm', 'webhook', 'command'].includes(wanted)) {
+        return { ok: false, message: `没有这种通知渠道：${wanted}`, results: [], dryRun: cfg.safety.dryRun };
+      }
+
+      const dryRun = cfg.safety.dryRun;
+      const text = `【测试】BiliWhale 通知测试 · ${localIso(now)}${dryRun ? '（预演：只记录，不真的发）' : ''}`;
+      const all = cfg.notify.channels ?? [];
+      // 指定渠道时严格按那个渠道测；没指定就测所有打开着的。file 永远能测（兜底日志）。
+      let targets = wanted ? all.filter((channel) => channel.type === wanted) : all.filter((channel) => channel.enabled);
+      if (wanted === 'file' && targets.length === 0) {
+        targets = [{ type: 'file', enabled: true } as (typeof all)[number]];
+      }
+      if (wanted && targets.length === 0) {
+        return { ok: false, message: `「${channelName(wanted)}」还没配置：先填好地址/命令再试`, results: [], dryRun };
+      }
+      if (targets.length === 0) {
+        return { ok: false, message: '一个通知渠道都没开：先打开「B 站私信」或「本机日志」', results: [], dryRun };
+      }
+
+      const results: Array<{ channel: string; ok: boolean; detail: string }> = [];
+
+      // 私信不走 dispatchNotifications（那里只负责 file/webhook/command，私信由 dm 模块发）
+      if (targets.some((channel) => channel.type === 'dm')) {
+        if (dryRun) {
+          appendNotifyLog(ctx.paths, `${text}\n（预演：私信没发）`, now);
+          results.push({ channel: 'dm', ok: true, detail: '预演：只写进日志，没发私信' });
+        } else {
+          const dm = await sendManualDm(
+            {
+              logger: ctx.logger,
+              config: cfg,
+              quota: ctx.quota,
+              state: ctx.state,
+              writer: ctx.writer,
+              secrets: ctx.secrets,
+              chat: ctx.chat,
+              now: () => now,
+            },
+            { text },
+          );
+          results.push({ channel: 'dm', ok: dm.ok, detail: dm.message });
+        }
+      }
+
+      const rest = targets.filter((channel) => channel.type !== 'dm').map((channel) => ({ ...channel, enabled: true }));
+      if (rest.length > 0) {
+        const dispatched = await dispatchNotifications(
+          {
+            config: { ...cfg, notify: { ...cfg.notify, channels: rest } },
+            logger: ctx.logger,
+            writeFile: (value: string) => {
+              appendNotifyLog(ctx.paths, value, now);
+            },
+          },
+          { text, at: now },
+        );
+        for (const channel of rest) {
+          const failed = dispatched.failed.find((item) => item.channel === channel.type);
+          if (failed) {
+            results.push({ channel: channel.type, ok: false, detail: `没发成：${failed.error}` });
+            continue;
+          }
+          if (dispatched.delivered.includes(channel.type)) {
+            results.push({ channel: channel.type, ok: true, detail: channel.type === 'file' ? '已写进本机日志' : '已发出' });
+            continue;
+          }
+          const skipped = dispatched.skipped.find((line) => line.startsWith(`${channel.type}：`));
+          results.push({
+            channel: channel.type,
+            ok: false,
+            detail: channel.type === 'file' ? '没写成' : `没发：${skipped ? skipped.slice(channel.type.length + 1) : '原因不明'}`,
+          });
+        }
+      }
+
+      const ok = results.length > 0 && results.every((item) => item.ok);
+      const message = results.map((item) => `${channelName(item.channel)}：${item.ok ? '' : '（失败）'}${item.detail}`).join('；');
+      ctx.logger.event('notify', `通知测试（${wanted || '全部'}）：${message}`, {
+        level: ok ? 'info' : 'warn',
+        target: 'http',
+        ...(dryRun ? { data: { dryRun: true } } : {}),
+      });
+      return { ok, message: message || '没有渠道可测', results, dryRun };
+    },
+
+    /** 发动态（面板手动、二次确认；服务端再判一次开关/额度/确认）。 */
+    async publishDynamic(body: { text: string; confirm: boolean; dryRun?: boolean }) {
+      const cfg = ctx.config.get();
+      const text = String(body?.text ?? '').trim();
+      if (!text) return { ok: false, message: '内容是空的', deny: [] };
+      if (Array.from(text).length > 2000) return { ok: false, message: '动态太长了（B 站上限 2000 字）', deny: [] };
+
+      const result = await publishDynamicNow(
+        { logger: ctx.logger, config: cfg, quota: ctx.quota, state: ctx.state, writer: ctx.writer },
+        { text, confirm: Boolean(body?.confirm), dryRun: cfg.safety.dryRun || Boolean(body?.dryRun) },
+      );
+      if (result.ok && result.status === 'sent') {
+        ctx.logger.event('dynamic', '在面板手动发了一条动态', { target: 'share', data: { chars: Array.from(text).length } });
+      }
+      const message = result.ok
+        ? result.status === 'dry_run'
+          ? `预演：${result.note}（没真的发）`
+          : `已发动态：${result.note}`
+        : `没发：${result.note}`;
+      return { ok: result.ok, message, status: result.status, deny: result.deny };
+    },
+
+    /**
+     * 今天（或指定那天）报告里「挑中的」条目：面板的「发动态…」入口按它列出来。
+     * 从报告里解析而不是再从 B 站拉一遍——报告本来就是这一轮的结论。
+     */
+    picked(query?: string) {
+      const date = /^\d{4}-\d{2}-\d{2}$/.test(query ?? '') ? String(query) : localDate();
+      let markdown = '';
+      try {
+        markdown = fs.readFileSync(path.join(ctx.paths.reportsDir, `${date}.md`), 'utf8');
+      } catch {
+        return { date, items: [] as Array<{ bvid: string; title: string; oneliner: string; why: string; url: string }> };
+      }
+      return { date, items: parsePicked(markdown) };
     },
 
     /* ---------------- 私聊（M4） ---------------- */
@@ -709,6 +866,56 @@ function findTodayVideo(ctx: AppContext, bvid: string): { bvid: string; title: s
     .filter((line) => line.length > 0)
     .join('\n');
   return { bvid, title, text };
+}
+
+/** 渠道的内部枚举 → 面板上说的中文名（返回给用户的原因里不许出现英文枚举）。 */
+function channelName(type: string): string {
+  switch (type) {
+    case 'file':
+      return '本机日志';
+    case 'dm':
+      return 'B 站私信';
+    case 'webhook':
+      return '自定义 webhook';
+    case 'command':
+      return '本地命令';
+    default:
+      return type;
+  }
+}
+
+/**
+ * 从报告里解析「挑中的」条目（`### 挑中的` 下面每条以 `#### BV… · 标题` 开头）。
+ * 只认我们自己写出来的格式；解析不出来就返回空列表（面板显示「今天还没挑出视频」）。
+ */
+function parsePicked(markdown: string): Array<{ bvid: string; title: string; oneliner: string; why: string; url: string }> {
+  const items: Array<{ bvid: string; title: string; oneliner: string; why: string }> = [];
+  let inPicked = false;
+  let current: { bvid: string; title: string; oneliner: string; why: string } | null = null;
+  for (const line of markdown.split('\n')) {
+    if (/^###\s/.test(line)) {
+      inPicked = line.includes('挑中的');
+      current = null;
+      continue;
+    }
+    if (!inPicked) continue;
+    // bvid 正常是 BV + 10 位，但夹具里是假的短号：宽一点匹配，别因为 id 长度漏掉
+    const head = /^####\s+(BV[0-9A-Za-z]{6,14})\s*·\s*(.*)$/.exec(line);
+    if (head) {
+      current = { bvid: head[1] ?? '', title: (head[2] ?? '').trim(), oneliner: '', why: '' };
+      items.push(current);
+      continue;
+    }
+    if (!current) continue;
+    const one = /^-\s*一句话[:：]\s*(.+)$/.exec(line);
+    if (one) {
+      current.oneliner = (one[1] ?? '').trim();
+      continue;
+    }
+    const why = /^-\s*为什么值得[:：]\s*(.+)$/.exec(line);
+    if (why) current.why = (why[1] ?? '').trim();
+  }
+  return items.map((item) => ({ ...item, url: videoUrl(item.bvid) }));
 }
 
 function sanitizeConfigPatch(

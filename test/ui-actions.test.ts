@@ -4,6 +4,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 
+import { describeConfig } from '../src/config/describe.ts';
+import { buildDefaults } from '../src/config/validate.ts';
+
 /**
  * 面板「点了有没有用」的测试。
  *
@@ -20,6 +23,7 @@ interface Node {
   innerHTML: string;
   value: string;
   checked: boolean;
+  disabled: boolean;
   children: Node[];
   listeners: Record<string, Array<(...args: unknown[]) => void>>;
   classList: { add: (name: string) => void; remove: (name: string) => void; toggle: (name: string, on: boolean) => void; contains: (name: string) => boolean };
@@ -43,6 +47,7 @@ function makeNode(tagName: string): Node {
     innerHTML: '',
     value: '',
     checked: false,
+    disabled: false,
     children: [],
     listeners: {},
     classList: {
@@ -97,9 +102,10 @@ interface Harness {
   bySelector: Map<string, Node>;
   calls: Array<{ url: string; method: string; body?: unknown }>;
   errors: string[];
+  body: Node;
 }
 
-async function loadPanel(hash = '#/account'): Promise<Harness> {
+async function loadPanel(hash = '#/account', extra: Record<string, unknown> = {}): Promise<Harness> {
   const script = fs.readFileSync(path.join(process.cwd(), 'src', 'ui', 'app.js'), 'utf8');
   const bySelector = new Map<string, Node>();
   const calls: Harness['calls'] = [];
@@ -173,6 +179,7 @@ async function loadPanel(hash = '#/account'): Promise<Harness> {
     },
     '/api/logs': { ok: true, events: [] },
   };
+  Object.assign(responses, extra);
 
   const fetchStub = async (input: string, init?: { method?: string; body?: string }): Promise<unknown> => {
     const key = String(input).split('?')[0] ?? '';
@@ -181,6 +188,7 @@ async function loadPanel(hash = '#/account'): Promise<Harness> {
     return { ok: true, status: 200, text: async () => JSON.stringify(body) };
   };
 
+  const bodyNode = makeNode('body');
   const sandbox: Record<string, unknown> = {
     console: { log: () => undefined, warn: () => undefined, error: (...args: unknown[]) => errors.push(args.join(' ')) },
     document: {
@@ -188,7 +196,7 @@ async function loadPanel(hash = '#/account'): Promise<Harness> {
       createTextNode: (text: string) => ({ textContent: text }),
       querySelector: (selector: string) => get(selector),
       querySelectorAll: (selector: string) => (selector === '.panel' ? [get('#panel-account'), get('#panel-overview')] : []),
-      body: makeNode('body'),
+      body: bodyNode,
     },
     window: { addEventListener: () => undefined },
     location: { hash, search: '', pathname: '/' },
@@ -223,7 +231,27 @@ async function loadPanel(hash = '#/account'): Promise<Harness> {
 
   vm.runInNewContext(script, sandbox, { filename: 'app.js' });
   for (let i = 0; i < 20; i += 1) await new Promise((resolve) => setImmediate(resolve));
-  return { bySelector, calls, errors };
+  return { bySelector, calls, errors, body: bodyNode };
+}
+
+/** 真实的 /api/config：分组元数据来自 spec（不手写一份，避免和实现走偏）。 */
+function realConfigResponse(): Record<string, unknown> {
+  return {
+    ok: true,
+    config: buildDefaults(),
+    groups: describeConfig(),
+    defaults: {},
+    issues: [],
+    examples: {
+      webhookUrl: 'https://open.feishu.cn/open-apis/bot/v2/hook/example',
+      command: 'C:\\Tools\\notify.exe',
+      commandArgs: '--title BiliWhale',
+    },
+  };
+}
+
+async function flush(steps = 10): Promise<void> {
+  for (let i = 0; i < steps; i += 1) await new Promise((resolve) => setImmediate(resolve));
 }
 
 function buttons(root: Node): Node[] {
@@ -371,4 +399,157 @@ test('待审页：有草稿时「发」会打 approve，「不发」会打 rejec
     h.calls.some((call) => call.url.includes('/api/pending/') && call.url.endsWith('/reject')),
     '应该请求 reject',
   );
+});
+
+/* ---------------- P0-2：通知渠道 ---------------- */
+
+test('通知：主界面只露「B 站私信 / 本机日志」，看不到 webhook/command/format/template', async () => {
+  const h = await loadPanel('#/settings', { '/api/config': realConfigResponse() });
+  assert.deepEqual(h.errors, [], h.errors.join(' | '));
+  const panel = h.bySelector.get('#panel-settings');
+  assert.ok(panel);
+  const text = textOf(panel);
+
+  assert.match(text, /B 站私信/, '要有「B 站私信」这个中文渠道名');
+  assert.match(text, /本机日志/, '要有「本机日志」这个中文渠道名');
+  assert.match(text, /夜里别吵我/, '静默时段要说人话');
+  for (const word of ['webhook', 'command', 'format', 'template', 'sendSummary', 'sendDiary', 'sendVideoInfo']) {
+    assert.equal(text.includes(word), false, `面板正文里不该出现「${word}」（用户看不懂，也因此没去测）`);
+  }
+});
+
+test('通知：点「发条测试」会 POST /api/notify/test，并且带上点的是哪个渠道', async () => {
+  const h = await loadPanel('#/settings', { '/api/config': realConfigResponse() });
+  const panel = h.bySelector.get('#panel-settings');
+  assert.ok(panel);
+
+  const isFile = (node: Node) => (node as unknown as Record<string, unknown>)['data-channel'] === 'file';
+  const fileCard = findAll(panel, isFile)[0];
+  assert.ok(fileCard, '找不到「本机日志」那张卡');
+
+  const testButton = buttons(fileCard).find((button) => textOf(button).includes('发条测试'));
+  assert.ok(testButton, `本机日志卡里应该有「发条测试」：${buttons(fileCard).map(textOf).join(' / ')}`);
+  testButton.click();
+  await flush();
+
+  const call = h.calls.find((item) => item.url === '/api/notify/test');
+  assert.ok(call, `应该请求 /api/notify/test，实际：${h.calls.map((item) => item.url).join(' / ')}`);
+  assert.equal(call?.method, 'POST', '发测试是写操作（要 CSRF）');
+  assert.deepEqual(call?.body, { channel: 'file' }, '要说清测的是哪个渠道');
+});
+
+test('通知：高级默认折叠不渲染；展开后是中文说明 + 可复制的例子', async () => {
+  const h = await loadPanel('#/settings', { '/api/config': realConfigResponse() });
+  const panel = h.bySelector.get('#panel-settings');
+  assert.ok(panel);
+
+  const details = findAll(panel, (node) => node.tagName === 'DETAILS')[0];
+  assert.ok(details, '应该有「高级（一般不用改）」折叠区');
+  assert.match(textOf(details), /高级/, '折叠区的标题要是人话');
+  assert.equal(textOf(details).includes('自定义地址推送'), false, '没展开时不该把高级字段渲染出来');
+
+  for (const handler of details.listeners.toggle ?? []) handler({});
+  await flush(1);
+  const opened = textOf(details);
+  assert.match(opened, /自定义地址推送/, '展开后要有自定义地址渠道');
+  assert.match(opened, /本地命令/, '展开后要有本地命令渠道');
+  assert.match(opened, /飞书群机器人/, '取值要显示中文名，不是 feishu');
+  assert.match(opened, /C:\\Tools\\notify\.exe/, '命令字段要给一个可复制的例子');
+  for (const raw of ['generic', 'dingtalk', 'wecom', 'markdown']) {
+    assert.equal(opened.includes(raw), false, `展开后也不该露出英文枚举「${raw}」`);
+  }
+  // 下拉框的选项文字必须是中文（例子 URL 里出现 feishu 字样不算）
+  const selects = findAll(details, (node) => node.tagName === 'SELECT');
+  assert.ok(selects.length > 0, '高级区应该有下拉框');
+  for (const select of selects) {
+    for (const option of select.children) {
+      const label = textOf(option as Node);
+      assert.equal(/^(generic|feishu|dingtalk|wecom|telegram|text|markdown)$/.test(label), false, `下拉选项还是英文枚举：${label}`);
+    }
+  }
+  const copyButtons = buttons(details).filter((button) => textOf(button) === '复制');
+  assert.ok(copyButtons.length > 0, '例子旁边要有「复制」按钮');
+});
+
+/* ---------------- P0-3：发动态 / 删自己的评论 ---------------- */
+
+test('概览「本轮挑中」：点「发动态…」弹确认框，确认后 POST /api/dynamic（confirm=true）', async () => {
+  const h = await loadPanel('#/overview', {
+    '/api/picked': {
+      ok: true,
+      date: '2026-10-22',
+      items: [
+        {
+          bvid: 'BV1pick00001',
+          title: '一条视频',
+          oneliner: '这条值得看',
+          why: '有信息量',
+          url: 'https://www.bilibili.com/video/BV1pick00001',
+        },
+      ],
+    },
+  });
+  assert.deepEqual(h.errors, [], h.errors.join(' | '));
+  const panel = h.bySelector.get('#panel-overview');
+  assert.ok(panel);
+
+  const dyn = buttons(panel).find((button) => textOf(button).includes('发动态'));
+  assert.ok(dyn, `「本轮挑中」里应该有「发动态…」：${buttons(panel).map(textOf).join(' / ')}`);
+  dyn.click();
+  await flush();
+
+  const mask = h.body.children.find((child) => String(child.className || '').includes('modal-mask'));
+  assert.ok(mask, '点「发动态…」应该弹出确认框');
+
+  const send = buttons(mask).find((button) => textOf(button).includes('确认发出去'));
+  assert.ok(send, `确认框里要有「确认发出去」：${buttons(mask).map(textOf).join(' / ')}`);
+  send.click();
+  await flush();
+
+  const call = h.calls.find((item) => item.url === '/api/dynamic');
+  assert.ok(call, `应该 POST /api/dynamic，实际：${h.calls.map((item) => `${item.method} ${item.url}`).join(' / ')}`);
+  assert.equal(call?.method, 'POST');
+  const body = call?.body as { text?: string; confirm?: boolean };
+  assert.equal(body.confirm, true, '必须带二次确认');
+  assert.match(String(body.text), /BV1pick00001/, '文案里要带上这条视频');
+});
+
+test('待审页删评论：必须输入「删除」两个字才可点，点了才 DELETE', async () => {
+  const h = await loadPanel('#/pending', {
+    '/api/pending': {
+      ok: true,
+      count: 0,
+      items: [],
+      history: [],
+      recent: [{ bvid: 'BV1lead00001', rpid: '778899', at: new Date().toISOString(), status: 'sent', share: true, aid: 9001 }],
+    },
+  });
+  assert.deepEqual(h.errors, [], h.errors.join(' | '));
+  const panel = h.bySelector.get('#panel-pending');
+  assert.ok(panel);
+
+  const del = buttons(panel).find((button) => textOf(button).includes('删除…'));
+  assert.ok(del, `账本行旁边应该有「删除…」：${buttons(panel).map(textOf).join(' / ')}`);
+  del.click();
+  await flush();
+
+  const input = findAll(panel, (node) => node.tagName === 'INPUT')[0];
+  const confirm = buttons(panel).find((button) => textOf(button) === '确认删除');
+  assert.ok(input, '应该有输入框');
+  assert.ok(confirm, '应该有「确认删除」');
+  assert.equal(confirm.disabled, true, '还没输入时不能点');
+
+  input.value = '删';
+  for (const handler of input.listeners.input ?? []) handler({});
+  assert.equal(confirm.disabled, true, '只输入一个字也不能点');
+
+  input.value = '删除';
+  for (const handler of input.listeners.input ?? []) handler({});
+  assert.equal(confirm.disabled, false, '输入「删除」两个字后才能点');
+
+  confirm.click();
+  await flush();
+  const call = h.calls.find((item) => item.method === 'DELETE');
+  assert.ok(call, `应该发 DELETE，实际：${h.calls.map((item) => `${item.method} ${item.url}`).join(' / ')}`);
+  assert.match(call.url, /\/api\/comments\/BV1lead00001\/778899/);
 });

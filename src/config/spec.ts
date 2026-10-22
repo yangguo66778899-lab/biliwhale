@@ -44,6 +44,11 @@ export interface EnumField extends BaseField {
   kind: 'enum';
   values: readonly string[];
   default: string;
+  /**
+   * 面板上显示给人看的取值（中文）。值本身仍是 `values` 里的英文枚举（配置/代码只认它）。
+   * 为什么要有：设置页直接把枚举值当选项文本渲染，用户会看到 `full / brief / webhook` 这种词。
+   */
+  valueLabels?: Readonly<Record<string, string>>;
 }
 
 export interface ArrayField extends BaseField {
@@ -93,11 +98,18 @@ export const SPEC = {
       label: '程序行为',
       fields: {
         dataDir: { kind: 'string', label: '数据目录', desc: '留空 = %APPDATA%\\BiliWhale', default: '', maxLen: 260 },
-        locale: { kind: 'enum', label: '界面语言', values: ['zh-CN'] as const, default: 'zh-CN' },
+        locale: {
+          kind: 'enum',
+          label: '界面语言',
+          values: ['zh-CN'] as const,
+          valueLabels: { 'zh-CN': '简体中文' } as const,
+          default: 'zh-CN',
+        },
         logLevel: {
           kind: 'enum',
           label: '日志级别',
           values: ['debug', 'info', 'warn', 'error'] as const,
+          valueLabels: { debug: '调试（很啰嗦）', info: '一般', warn: '警告与错误', error: '只记错误' } as const,
           default: 'info',
         },
         autostart: { kind: 'boolean', label: '开机自启', desc: '写 HKCU Run 键，不需要管理员', default: true },
@@ -312,7 +324,13 @@ export const SPEC = {
       label: '分享',
       fields: {
         enabled: { kind: 'boolean', label: '允许对外分享', desc: '默认关：拿你的号说话，得你亲手打开', default: false },
-        via: { kind: 'enum', label: '分享渠道', values: ['comment', 'dm'] as const, default: 'comment' },
+        via: {
+          kind: 'enum',
+          label: '分享渠道',
+          values: ['comment', 'dm'] as const,
+          valueLabels: { comment: '发评论（在她的评论区 @ 你）', dm: '发私信给你' } as const,
+          default: 'comment',
+        },
         minScore: { kind: 'number', label: '分享分数门槛', default: 13, min: 0, max: 20, int: true },
         dailyCap: { kind: 'number', label: '每日分享上限', desc: '超过 3 会警告（自己定的上限自己负责）', default: 3, min: 0, max: 10, int: true },
         perVideoDays: { kind: 'number', label: '同一视频冷却（天）', default: 7, min: 1, max: 365, int: true },
@@ -378,7 +396,13 @@ export const SPEC = {
           fields: {
             enabled: { kind: 'boolean', label: '开启监听', default: false },
             intervalSec: { kind: 'number', label: '轮询间隔（秒）', desc: '最小 60', default: 300, min: 60, max: 3600, int: true },
-            scope: { kind: 'enum', label: '范围', values: ['reply', 'at', 'both'] as const, default: 'both' },
+            scope: {
+              kind: 'enum',
+              label: '范围',
+              values: ['reply', 'at', 'both'] as const,
+              valueLabels: { reply: '有人回我的评论', at: '有人 @ 我', both: '两者都听' } as const,
+              default: 'both',
+            },
             allDay: { kind: 'boolean', label: '全天监听', desc: '关 = 只在作息窗口内听', default: false },
             oncePerPerson: { kind: 'boolean', label: '每人每轮只回一次', default: false },
           },
@@ -424,7 +448,13 @@ export const SPEC = {
       kind: 'object',
       label: '日报',
       fields: {
-        level: { kind: 'enum', label: '详细程度', values: ['full', 'brief', 'off'] as const, default: 'full' },
+        level: {
+          kind: 'enum',
+          label: '详细程度',
+          values: ['full', 'brief', 'off'] as const,
+          valueLabels: { full: '完整', brief: '只写要点', off: '不写' } as const,
+          default: 'full',
+        },
         dir: { kind: 'string', label: '目录', desc: '相对数据目录', default: 'reports', maxLen: 200 },
         archive: { kind: 'boolean', label: '写月度归档', default: true },
       },
@@ -437,7 +467,7 @@ export const SPEC = {
         channels: {
           kind: 'array',
           label: '通知渠道',
-          desc: '可同时开多个；全部失败时仍会兜底写一份到 logs/notify.log',
+          desc: '跑完一轮把结果发到哪里；可以同时开多个，全都没成时会兜底写一份到 logs/notify.log',
           maxItems: 8,
           default: [
             { type: 'file', enabled: true, path: '', url: '', format: 'generic', template: 'text', cmd: '', args: '', sendSummary: true, sendDiary: false, sendVideoInfo: false },
@@ -448,37 +478,76 @@ export const SPEC = {
             fields: {
               type: {
                 kind: 'enum',
-                label: '类型',
+                label: '哪种渠道',
                 values: ['file', 'webhook', 'command', 'dm'] as const,
-                desc: '桌面 Toast 需要托盘配合，暂不支持（用 webhook/command 可自己弹）',
+                valueLabels: { file: '本机日志', dm: 'B 站私信', webhook: '自定义 Webhook', command: '本地命令' } as const,
+                desc: '面板主界面只露「B 站私信」和「本机日志」两个；另外两个在「高级」里',
                 default: 'file',
               },
-              enabled: { kind: 'boolean', label: '启用', default: false },
-              path: { kind: 'string', label: '文件路径（file）', default: '', maxLen: 260 },
-              url: { kind: 'string', label: 'Webhook 地址', default: '', maxLen: 500 },
+              enabled: { kind: 'boolean', label: '打开这个渠道', default: false },
+              path: {
+                kind: 'string',
+                label: '写到哪个文件',
+                desc: '留空 = 默认的 logs/notify.log；填了就写到那个文件',
+                default: '',
+                maxLen: 260,
+              },
+              url: {
+                kind: 'string',
+                label: 'Webhook 地址',
+                desc: '机器人给你的那条完整链接，直接粘进来',
+                default: '',
+                maxLen: 500,
+              },
               format: {
                 kind: 'enum',
-                label: 'Webhook 格式',
+                label: '对方是哪家服务',
                 values: ['generic', 'feishu', 'dingtalk', 'wecom', 'telegram'] as const,
+                valueLabels: {
+                  generic: '通用（只认一个 text 字段）',
+                  feishu: '飞书群机器人',
+                  dingtalk: '钉钉群机器人',
+                  wecom: '企业微信群机器人',
+                  telegram: 'Telegram Bot',
+                } as const,
+                desc: '不同服务的报文格式不一样；不确定就选「通用」',
                 default: 'generic',
               },
-              template: { kind: 'enum', label: '消息格式', values: ['text', 'markdown'] as const, default: 'text' },
-              cmd: { kind: 'string', label: '命令（command）', desc: '不走 shell；消息作为最后一个参数', default: '', maxLen: 260 },
-              args: { kind: 'string', label: '参数', desc: '空格分隔，写在消息前面', default: '', maxLen: 500 },
-              sendSummary: { kind: 'boolean', label: '发本轮摘要（dm）', default: true },
-              sendDiary: { kind: 'boolean', label: '发公开日记（dm）', default: false },
-              sendVideoInfo: { kind: 'boolean', label: '发视频信息块（dm）', default: false },
+              template: {
+                kind: 'enum',
+                label: '消息格式',
+                values: ['text', 'markdown'] as const,
+                valueLabels: { text: '纯文本（最稳）', markdown: '富文本（对方要支持）' } as const,
+                default: 'text',
+              },
+              cmd: {
+                kind: 'string',
+                label: '要执行的命令',
+                desc: '程序名或完整路径；不走 shell，消息内容放在环境变量 BILIWHALE_NOTIFY_TEXT 里',
+                default: '',
+                maxLen: 260,
+              },
+              args: {
+                kind: 'string',
+                label: '命令参数',
+                desc: '空格分隔；消息内容不放在这里（见上一条）',
+                default: '',
+                maxLen: 500,
+              },
+              sendSummary: { kind: 'boolean', label: '发本轮摘要', desc: '一轮跑完的一句话总结', default: true },
+              sendDiary: { kind: 'boolean', label: '发今天的公开日记', desc: '私信里再发一份公开日记', default: false },
+              sendVideoInfo: { kind: 'boolean', label: '发视频信息块', desc: '标题、链接和一句话理解', default: false },
             },
           },
         },
         quietHours: {
           kind: 'object',
           label: '静默时段',
-          desc: '这段时间只写文件，不发 webhook/命令/私信（可以跨零点，例如 23:00–08:00）',
+          desc: '这段时间只写本机日志，不发私信/地址/命令（可以跨零点，例如 23:00–08:00）',
           fields: {
-            enabled: { kind: 'boolean', label: '启用静默时段', default: false },
-            start: { kind: 'string', label: '开始', default: '23:00', pattern: HHMM, patternMessage: '格式 HH:mm' },
-            end: { kind: 'string', label: '结束', default: '08:00', pattern: HHMM, patternMessage: '格式 HH:mm' },
+            enabled: { kind: 'boolean', label: '只在日志里记', default: false },
+            start: { kind: 'string', label: '从几点开始', default: '23:00', pattern: HHMM, patternMessage: '格式 HH:mm' },
+            end: { kind: 'string', label: '到几点结束', default: '08:00', pattern: HHMM, patternMessage: '格式 HH:mm' },
           },
         },
       },
@@ -503,7 +572,13 @@ export const SPEC = {
       fields: {
         port: { kind: 'number', label: '端口', default: 8787, min: 1024, max: 65535, int: true },
         openBrowserOnStart: { kind: 'boolean', label: '启动时打开浏览器', default: true },
-        theme: { kind: 'enum', label: '主题', values: ['auto', 'light', 'dark'] as const, default: 'auto' },
+        theme: {
+          kind: 'enum',
+          label: '主题',
+          values: ['auto', 'light', 'dark'] as const,
+          valueLabels: { auto: '跟随系统', light: '浅色', dark: '深色' } as const,
+          default: 'auto',
+        },
       },
     },
 
@@ -511,7 +586,13 @@ export const SPEC = {
       kind: 'object',
       label: '日志与保留期',
       fields: {
-        level: { kind: 'enum', label: '级别', values: ['debug', 'info', 'warn', 'error'] as const, default: 'info' },
+        level: {
+          kind: 'enum',
+          label: '级别',
+          values: ['debug', 'info', 'warn', 'error'] as const,
+          valueLabels: { debug: '调试（很啰嗦）', info: '一般', warn: '警告与错误', error: '只记错误' } as const,
+          default: 'info',
+        },
         retentionDays: { kind: 'number', label: '日志保留（天）', default: 30, min: 1, max: 3650, int: true },
         eventsRetentionDays: { kind: 'number', label: '事件保留（天）', default: 30, min: 1, max: 3650, int: true },
         runsRetentionDays: { kind: 'number', label: '运行记录保留（天）', default: 90, min: 1, max: 3650, int: true },

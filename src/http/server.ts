@@ -49,6 +49,8 @@ export interface StatusPayload {
     missing: Array<{ label: string; tab: string; hint: string }>;
   };
   model: { configured: string; actual: string; discoveredAt: string | null };
+  /** 写开关与预演状态：面板要说清「这一下是真发还是只打印」。 */
+  safety?: { writeEnabled: boolean; dryRun: boolean; killSwitch: boolean };
   /** M3：待审回复条数（托盘与概览都要显示）。 */
   pending: { count: number };
   warnings: string[];
@@ -133,6 +135,17 @@ export interface PanelHandlers {
   scanPending(): Promise<unknown>;
   /** M3：删自己发过的评论（面板手动、二次确认）。 */
   deleteComment(bvid: string, rpid: string, dryRun?: boolean): Promise<ActionResult>;
+  /** P0-2：给某个通知渠道发一条测试消息（预演时只写日志；写开关关着/急停/冷却时拒绝）。 */
+  notifyTest(body?: { channel?: string }): Promise<{
+    ok: boolean;
+    message: string;
+    results?: Array<{ channel: string; ok: boolean; detail: string }>;
+    dryRun?: boolean;
+  }>;
+  /** P0-3：面板手动发一条动态（二次确认；服务端再判一次开关/额度）。 */
+  publishDynamic(body: { text: string; confirm: boolean; dryRun?: boolean }): Promise<ActionResult & { status?: string; deny?: string[] }>;
+  /** P0-3：某天报告里「挑中的」视频（「发动态…」入口按它列）。 */
+  picked(date?: string): { date: string; items: Array<{ bvid: string; title: string; oneliner: string; why: string; url: string }> };
   /** M4：私聊状态、聊天记录、手动发送（测试/日记/视频信息）、清空记录。 */
   dm(): unknown;
   dmChat(limit: number): unknown;
@@ -579,6 +592,39 @@ export class ControlServer {
       const handler = this.handlers.deleteComment;
       if (!handler) return this.notImplemented(res, 'comments/delete');
       const result = await handler(deleteMatch[1] ?? '', decodeURIComponent(deleteMatch[2] ?? ''), false);
+      this.sendJson(res, result.ok ? 200 : 409, result);
+      return;
+    }
+
+    /* ---- 通知测试 / 发动态（P0-2 / P0-3） ---- */
+
+    if (method === 'POST' && url.pathname === '/api/notify/test') {
+      const handler = this.handlers.notifyTest;
+      if (!handler) return this.notImplemented(res, 'notify/test');
+      const body = await readJsonBody(req);
+      const channel = isRecord(body) && typeof body.channel === 'string' ? body.channel : undefined;
+      const result = await handler(channel ? { channel } : {});
+      this.sendJson(res, result.ok ? 200 : 409, result);
+      return;
+    }
+
+    if (method === 'GET' && url.pathname === '/api/picked') {
+      const handler = this.handlers.picked;
+      if (!handler) return this.notImplemented(res, 'picked');
+      const date = (url.searchParams.get('date') ?? '').trim();
+      if (date && !DATE_RE.test(date)) return this.sendJson(res, 400, { ok: false, error: '日期格式应为 YYYY-MM-DD' });
+      this.sendJson(res, 200, { ok: true, ...handler(date || undefined) });
+      return;
+    }
+
+    if (method === 'POST' && url.pathname === '/api/dynamic') {
+      const handler = this.handlers.publishDynamic;
+      if (!handler) return this.notImplemented(res, 'dynamic');
+      const body = await readJsonBody(req);
+      if (!isRecord(body)) return this.sendJson(res, 400, { ok: false, message: '请求体要是对象' });
+      const text = typeof body.text === 'string' ? body.text : '';
+      if (!text.trim()) return this.sendJson(res, 400, { ok: false, message: '内容是空的' });
+      const result = await handler({ text, confirm: body.confirm === true, dryRun: body.dryRun === true });
       this.sendJson(res, result.ok ? 200 : 409, result);
       return;
     }
