@@ -22,6 +22,7 @@ import type { BiliWriter } from '../bili/write.ts';
 import type { SecretsService } from '../config/secrets.ts';
 import crypto from 'node:crypto';
 import { localIso } from '../shared/time.ts';
+import { resolveOwner } from '../account/owner.ts';
 import { humanError } from '../shared/errors.ts';
 
 export interface PendingDeps {
@@ -78,6 +79,7 @@ export async function scanStrangerReplies(deps: PendingDeps, options: { maxPerRo
 
   const cap = Math.max(1, options.maxPerRound ?? cfg.listen.reply.maxPerRound ?? 1);
   const selfMid = deps.secrets.selfMid();
+  const owner = resolveOwner(cfg, selfMid);
 
   // 账本可能是别的进程（CLI）写的：先重读磁盘，否则会「看不见那条评论」
   deps.quota.reload();
@@ -136,9 +138,9 @@ export async function scanStrangerReplies(deps: PendingDeps, options: { maxPerRo
     let blocked: string | null = null;
     for (const reply of thread.data.replies) {
       if (result.created.length >= cap) break;
-      // 自己回自己的直接跳过：单账号下「主人」就是我们自己。
-      // 「主人回复直发」（ownerDirect）要等 M4 有监听循环与双账号场景时才有意义。
+      // 登录账号自己回自己的直接跳过（这不是「主人」，主人是另一个号）。
       if (reply.mid === selfMid) continue;
+      const fromOwner = owner.ok && reply.mid === owner.mid;
       detail.strangers += 1;
 
       if (deps.pending.has({ root: entry.rpid, parent: reply.rpid })) {
@@ -175,6 +177,7 @@ export async function scanStrangerReplies(deps: PendingDeps, options: { maxPerRo
         root: String(entry.rpid),
         parent: String(reply.rpid),
         target: { mid: reply.mid, uname: reply.uname },
+        ...(fromOwner ? { fromOwner: true } : {}),
         sourceComment: truncate(reply.message, 200),
         draft: draftText,
       });
@@ -201,6 +204,33 @@ export async function scanStrangerReplies(deps: PendingDeps, options: { maxPerRo
         scanned: result.scanned,
         details: result.details.map((item) => ({ bvid: item.bvid, replies: item.replies, strangers: item.strangers, note: item.note })),
       },
+    });
+  }
+  return result;
+}
+
+/**
+ * 主人直发（`listen.reply.ownerDirect`）：主人自己回的评论不走审批，直接回。
+ * 只处理标了 `fromOwner` 的草稿；是否真的发得出去仍由 `approvePending` 统一把关
+ * （总写开关 / 急停 / 风控冷却 / 预演 / 每日额度）。
+ */
+export async function autoApproveOwnerDrafts(
+  deps: PendingDeps,
+  drafts: Array<{ id: string; fromOwner?: boolean }>,
+): Promise<{ approved: Array<{ id: string; message: string; rpid?: string }>; skipped: string[] }> {
+  const result: { approved: Array<{ id: string; message: string; rpid?: string }>; skipped: string[] } = { approved: [], skipped: [] };
+  if (!deps.config.listen.reply.ownerDirect) {
+    result.skipped.push('主人直发关着（主人的回复也要审批）');
+    return result;
+  }
+  const owners = drafts.filter((item) => item.fromOwner);
+  if (owners.length === 0) return result;
+  for (const draft of owners) {
+    const outcome = await approvePending(deps, draft.id, {});
+    result.approved.push({ id: draft.id, message: outcome.message, ...(outcome.rpid ? { rpid: outcome.rpid } : {}) });
+    deps.logger.event('pending', outcome.ok ? `主人直发：已回（${draft.id}）` : `主人直发没发出去（${draft.id}）：${outcome.message}`, {
+      level: outcome.ok ? 'info' : 'warn',
+      target: 'pending',
     });
   }
   return result;

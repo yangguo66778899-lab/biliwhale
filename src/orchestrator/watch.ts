@@ -21,6 +21,7 @@ import type { PendingStore } from '../state/pending.ts';
 import { expiresAt, newPendingId } from '../state/pending.ts';
 import type { SecretsService } from '../config/secrets.ts';
 import { localIso } from '../shared/time.ts';
+import { resolveOwner } from '../account/owner.ts';
 
 export interface WatchDeps {
   logger: Logger;
@@ -39,6 +40,8 @@ export interface WatchResult {
   baseline: boolean;
   seen: number;
   created: number;
+  /** 这一轮新建的草稿 id（主人直发要用）。 */
+  createdIds: string[];
   skipped: string[];
 }
 
@@ -46,7 +49,7 @@ export interface WatchResult {
 export async function watchComments(deps: WatchDeps): Promise<WatchResult> {
   const now = deps.now ?? (() => new Date());
   const cfg = deps.config;
-  const result: WatchResult = { baseline: false, seen: 0, created: 0, skipped: [] };
+  const result: WatchResult = { baseline: false, seen: 0, created: 0, createdIds: [], skipped: [] };
 
   if (!cfg.listen.comment.enabled) {
     result.skipped.push('评论监听关着');
@@ -85,19 +88,22 @@ export async function watchComments(deps: WatchDeps): Promise<WatchResult> {
     return result;
   }
 
-  const owner = deps.config.account?.mid && deps.config.account.mid > 0 ? deps.config.account.mid : deps.secrets.selfMid();
+  // 主人只认 account.ownerMid（另一个号）；登录账号自己的消息一律跳过。
+  const owner = resolveOwner(deps.config, deps.secrets.selfMid());
+  const selfMid = deps.secrets.selfMid();
   const maxChars = deps.config.listen.reply.maxChars;
 
   for (const item of fresh) {
-    if (item.mid === owner || item.mid === deps.secrets.selfMid()) {
-      // 主人自己（或自己）的消息不进审批队列
-      result.skipped.push(`自己/主人的消息跳过（${item.uname}）`);
+    if (item.mid === selfMid) {
+      // 登录账号自己发的（自己回自己）不进队列
+      result.skipped.push(`登录账号自己的消息跳过（${item.uname}）`);
       continue;
     }
     if (deps.pending.has({ root: item.rootRpid || item.sourceRpid, parent: item.sourceRpid })) {
       result.skipped.push('这条已经在待审队列里了');
       continue;
     }
+    const fromOwner = owner.ok && item.mid === owner.mid;
     const draft = deps.draft
       ? await deps.draft({ source: item.content, uname: item.uname, videoTitle: String(item.oid), maxChars })
       : null;
@@ -105,8 +111,9 @@ export async function watchComments(deps: WatchDeps): Promise<WatchResult> {
       result.skipped.push(`没生成回复草稿（${item.uname}）`);
       continue;
     }
+    const id = newPendingId(now());
     deps.pending.add({
-      id: newPendingId(now()),
+      id,
       createdAt: localIso(now()),
       expiresAt: expiresAt(now()),
       status: 'pending',
@@ -115,10 +122,12 @@ export async function watchComments(deps: WatchDeps): Promise<WatchResult> {
       root: item.rootRpid || item.sourceRpid,
       parent: item.sourceRpid,
       target: { mid: item.mid, uname: item.uname },
+      ...(fromOwner ? { fromOwner: true } : {}),
       sourceComment: item.content.slice(0, 200),
       draft,
     });
     result.created += 1;
+    result.createdIds.push(id);
   }
 
   const newest = fresh.at(-1);

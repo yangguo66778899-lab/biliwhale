@@ -251,6 +251,8 @@ export interface PendingReply {
   /** 对方回复的 rpid（楼中楼的 parent）。 */
   parent: string;
   target: { mid: number; uname: string };
+  /** 这条是主人（account.ownerMid）回的，不是陌生人。 */
+  fromOwner?: boolean;
   /** 对方原话（截断，仅供判断）。 */
   sourceComment: string;
   /** 拟回复。 */

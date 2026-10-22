@@ -14,6 +14,7 @@ import { heartbeatFresh, readHeartbeat, readRuntime } from './lifecycle/runtime.
 import { AutostartService } from './lifecycle/autostart.ts';
 import type { AutostartStatus } from './lifecycle/autostart.ts';
 import type { AppContext } from './bootstrap.ts';
+import { resolveOwner } from './account/owner.ts';
 
 export type DoctorLevel = 'ok' | 'warn' | 'bad';
 
@@ -25,11 +26,25 @@ export interface DoctorRow {
   hint?: string;
 }
 
+export interface DoctorRequiredItem {
+  key: string;
+  label: string;
+  ok: boolean;
+  detail: string;
+  /** 缺了去哪修（面板页签）。 */
+  tab?: 'settings' | 'account' | 'about';
+  hint?: string;
+}
+
 export interface DoctorReport {
   generatedAt: string;
   version: string;
   dataDir: string;
   rows: DoctorRow[];
+  /** 首次配置/运行所需：一项一项列清楚「有 / 没有」。 */
+  required: DoctorRequiredItem[];
+  /** 必需项全有（≠ 一切正常，但至少能跑）。 */
+  ready: boolean;
   /** 有 bad 行时为 false。 */
   healthy: boolean;
 }
@@ -66,11 +81,21 @@ export async function runDoctor(ctx: AppContext, opts: DoctorOptions): Promise<D
 
   const hint = ctx.secrets.accountHint();
   push(
-    'B 站登录',
+    'B 站登录（鲸鲸自己）',
     hint.hasCookie ? 'ok' : 'warn',
     hint.uname ? `${hint.uname}（${hint.mid}）` : hint.hasCookie ? hint.fingerprint : '未登录（只能读评论，字幕会拿不到）',
     hint.hasCookie ? undefined : '面板「账号」页可以扫码',
   );
+
+  // 主人：@/私信/聊天都发给它，必须是**另一个**号。缺了就点明，不静默降级。
+  const owner = resolveOwner(cfg, ctx.secrets.selfMid());
+  if (owner.ok && owner.name) {
+    push('主人（你）', 'ok', `${owner.name}（${owner.mid}）`);
+  } else if (owner.ok) {
+    push('主人（你）', 'warn', `UID ${owner.mid}（昵称没填：评论里 @ 不到人）`, '面板「账号」页可按 UID 自动取昵称');
+  } else {
+    push('主人（你）', 'bad', owner.problem ?? '主人没配好', '面板「账号」页 → 主人 UID（必须是另一个号，不能填鲸鲸的 UID）');
+  }
 
   const ffmpeg = findFfmpeg(opts.ffmpegPath ?? cfg.media.ffmpegPath);
   push('ffmpeg', ffmpeg ? 'ok' : 'warn', ffmpeg ?? '没找到（不抽帧，可忽略）', '可选：装 ffmpeg 后用于抽帧');
@@ -141,11 +166,63 @@ export async function runDoctor(ctx: AppContext, opts: DoctorOptions): Promise<D
     push('模型列表', models.ok ? 'ok' : 'warn', models.ok ? `${models.data.length} 个：${models.data.slice(0, 6).join(', ')}` : models.error.message);
   }
 
+  // 首次配置 / 运行所需的清单：一项一项列清楚「有 / 没有」，缺哪个、去哪儿补。
+  const required: DoctorRequiredItem[] = [
+    {
+      key: 'node',
+      label: 'Node 22.6+',
+      ok: Number(process.versions.node.split('.')[0] ?? 0) >= 22,
+      detail: process.version,
+    },
+    {
+      key: 'datadir',
+      label: '数据目录可写',
+      ok: fs.existsSync(ctx.paths.dataDir),
+      detail: ctx.paths.dataDir,
+    },
+    {
+      key: 'apikey',
+      label: 'DeepSeek key',
+      ok: ctx.secrets.hasApiKey(),
+      detail: ctx.secrets.hasApiKey() ? '已配置' : '没有它跑不了任何一轮（预演也要真调模型）',
+      tab: 'settings',
+    },
+    {
+      key: 'login',
+      label: 'B 站登录（鲸鲸自己）',
+      ok: hint.hasCookie,
+      detail: hint.uname ? `${hint.uname}（${hint.mid}）` : '未登录：字幕拿不到、写不了',
+      tab: 'account',
+    },
+    {
+      key: 'owner',
+      label: '主人 UID（另一个号）',
+      ok: owner.ok && owner.mid > 0,
+      detail: owner.ok ? `${owner.name || '昵称待填'}（${owner.mid}）` : owner.problem ?? '没填',
+      tab: 'account',
+    },
+    {
+      key: 'ownerName',
+      label: '主人昵称（评论 @ 用）',
+      ok: owner.ok && owner.name.length > 0,
+      detail: owner.name || '没填：评论里 @ 不到人',
+      tab: 'account',
+    },
+    {
+      key: 'disk',
+      label: '磁盘剩余 ≥1 GB',
+      ok: rows.find((row) => row.name === '磁盘剩余')?.level !== 'warn',
+      detail: rows.find((row) => row.name === '磁盘剩余')?.detail ?? '未知',
+    },
+  ];
+
   return {
     generatedAt: new Date().toISOString(),
     version: opts.version,
     dataDir: ctx.paths.dataDir,
     rows,
+    required,
+    ready: required.every((item) => item.ok),
     healthy: rows.every((row) => row.level !== 'bad'),
   };
 }

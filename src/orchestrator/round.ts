@@ -43,8 +43,9 @@ import { collectCandidates } from './candidates.ts';
 import { gateShare } from './gate.ts';
 import type { GateDecision } from './gate.ts';
 import { executeShares, summarizeShares } from './share.ts';
+import { resolveOwner } from '../account/owner.ts';
 import type { ShareAttempt } from './share.ts';
-import { scanStrangerReplies } from './pending.ts';
+import { autoApproveOwnerDrafts, scanStrangerReplies } from './pending.ts';
 import { sendShareDm, sendDmNotify } from './dm.ts';
 import { executeFavorites } from './fav.ts';
 import { likeVideo } from './like.ts';
@@ -506,6 +507,7 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
       writer: deps.writer,
       api: deps.api,
       config: cfg,
+      selfMid: () => deps.secrets.selfMid(),
       now,
       ...(deps.shareVerifyDelaysMs ? { verifyDelaysMs: deps.shareVerifyDelaysMs } : {}),
       ...(deps.skipWriteWait ? { skipWait: true } : {}),
@@ -565,7 +567,7 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
           at: localIso(now()),
           type: 'dm',
           bvid: dmItems[0]?.bvid ?? '',
-          target: String(cfg.account.mid || deps.secrets.selfMid()),
+          target: String(resolveOwner(cfg, deps.secrets.selfMid()).mid || 'owner'),
           share: true,
           status: dm.dryRun ? 'dry_run' : 'sent',
           content: dm.texts[0] ?? '',
@@ -625,7 +627,7 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
   // 陌生人回复：把我们评论下的新回复落成待审草稿（M3 只建队列，不自动回）
   if (cfg.listen.reply.strangerApproval && shareReport.sent > 0 && !effectiveDryRun) {
     try {
-      const scan = await scanStrangerReplies({
+      const pendingDeps = {
         logger,
         config: cfg,
         quota: deps.quota,
@@ -637,10 +639,16 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
         secrets: deps.secrets,
         now,
         ...(deps.pendingDraft ? { draft: deps.pendingDraft } : {}),
-      });
+      };
+      const scan = await scanStrangerReplies(pendingDeps);
       if (scan.created.length > 0) {
         notes.push(`${scan.created.length} 条陌生人回复进了待审队列（面板「待审」页处理）`);
         markPhase('pending', 0, 'ok', `${scan.created.length} 条待审`);
+      }
+      // 主人直发：主人自己回的评论不排队，直接回（仍受同一套写开关 / 风控 / 预演约束）
+      if (cfg.listen.reply.ownerDirect) {
+        const auto = await autoApproveOwnerDrafts(pendingDeps, scan.created);
+        if (auto.approved.length > 0) notes.push(`主人直发：回了 ${auto.approved.length} 条`);
       }
     } catch (err) {
       notes.push(`待审扫描失败（不影响本轮）：${humanError(err)}`);

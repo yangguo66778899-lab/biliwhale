@@ -303,6 +303,29 @@ export class BiliApi implements WbiProvider {
     return { ok: true, data: matched.message.includes(expected.slice(0, 20)) };
   }
 
+  /**
+   * 按 UID 取用户名片（只为了拿到主人昵称，用于评论 @）。
+   * 取不到就返回错误，调用方让用户手填——不猜、不拿登录账号顶替。
+   */
+  async userCard(mid: number): Promise<Result<{ mid: number; name: string }>> {
+    if (!Number.isFinite(mid) || mid <= 0) {
+      return { ok: false, error: { kind: 'business', code: 'bad_mid', message: 'UID 不合法' } };
+    }
+    const res = await this.http.json<{ card?: { mid?: unknown; name?: unknown } }>({
+      url: `${API}/x/web-interface/card`,
+      query: { mid },
+      referer: REFERER_HOME,
+    });
+    if (!res.ok) return res;
+    const card = res.data?.card;
+    const name = typeof card?.name === 'string' ? card.name.trim() : '';
+    const gotMid = numOr(card?.mid, mid);
+    if (!name) {
+      return { ok: false, error: { kind: 'parse', code: 'no_name', message: '名片里没有昵称（可能被隐藏或该 UID 不存在）' } };
+    }
+    return { ok: true, data: { mid: gotMid, name } };
+  }
+
   /* ---------------- M4 读能力 ---------------- */
 
   /** 这个视频在我的哪些收藏夹里（收藏复核就靠它；空数组 = 没收藏）。 */

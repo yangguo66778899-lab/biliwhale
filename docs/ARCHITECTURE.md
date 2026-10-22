@@ -29,6 +29,7 @@ daemon（src/daemon/）── 单实例 · 调度循环 · 心跳 · 优雅退�
    ├─ doctor.ts             体检（CLI 与面板共用）
    ├─ diagnostics.ts        脱敏诊断包
    ├─ account/login.ts      扫码登录 / cookie 粘贴 / nav 复核
+   ├─ account/owner.ts      主人是谁（唯一入口；双账号模型，不回退到登录账号）
    ├─ qr/encoder.ts         二维码编码器（自己写，零依赖）
    ├─ bili/write.ts         写能力（评论/楼中楼/删/收藏/点赞/私信/动态；csrf + 签名 + 写间隔 + dry-run plan）
    ├─ orchestrator/share.ts 分享执行器：闸门 → 幂等 → 发送 → 复核 → 记账
@@ -172,6 +173,10 @@ Phase 10 收尾     token 记账 / run 记录 / 事件    → state.noteRun + ad
 33. **预演只有一个来源**：`runRound` 开头的 `effectiveDryRun = options.dryRun || cfg.safety.dryRun` 是唯一判据；
     提示词状态、报告措辞、run 记录、分享/收藏/点赞/私信都必须用它。`round.ts` 与 `daemon/runner.ts` 里**不许**写死 `dryRun: true`
     （有不变式测试扫源码；真机上「报告总说预演、模型总说只读预演、定时那一轮从不真发」就是这么来的）。
+
+34. **主人 ≠ 登录账号**：`account.mid/name` 是登录账号（鲸鲸自己，发送方身份），`account.ownerMid/ownerName` 是主人（另一个号，必填）。
+    所有「@ 谁 / 私信发给谁 / 聊天只认谁 / 主人直发」都走 `src/account/owner.ts` 的 `resolveOwner()`，**不许回退到登录账号**；
+    缺主人或填成登录账号 → 明确拒绝并给出可读原因（真机上「@ 是空的、私信发给自己、聊天不回主人」就是这么来的）。
 
 ## 想加东西时改哪里
 

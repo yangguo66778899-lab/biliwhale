@@ -13,6 +13,7 @@ import type { Config } from '../config/spec.ts';
 import type { QuotaLedger } from '../state/ledgers.ts';
 import type { AppStateStore } from '../state/appState.ts';
 import type { BiliWriter } from '../bili/write.ts';
+import { resolveOwner } from '../account/owner.ts';
 
 export interface ManualDeleteDeps {
   logger: Logger;
@@ -63,7 +64,7 @@ export interface ManualDmDeps extends ManualDeleteDeps {
 
 /**
  * 面板手动发私信：测试消息 / 今天的公开日记 / 今天上下文里的视频信息。
- * 只发给主人（配置里的 account.mid）；只发今天报告里出现过的 BV；≤500 字。
+ * 只发给主人（配置里的 account.ownerMid，必须是另一个号）；只发今天报告里出现过的 BV；≤500 字。
  */
 export async function sendManualDm(
   deps: ManualDmDeps,
@@ -73,8 +74,9 @@ export async function sendManualDm(
   if (!cfg.safety.writeEnabled) return { ok: false, message: '总写开关关着' };
   if (cfg.safety.killSwitch) return { ok: false, message: '急停开着' };
 
-  const receiver = cfg.account?.mid && cfg.account.mid > 0 ? cfg.account.mid : deps.secrets.selfMid();
-  if (receiver <= 0) return { ok: false, message: '不知道发给谁：先登录（面板「账号」页）' };
+  const owner = resolveOwner(cfg, deps.secrets.selfMid());
+  if (!owner.ok) return { ok: false, message: owner.problem ?? '主人还没配置' };
+  const receiver = owner.mid;
 
   let text = input.text?.trim() ?? '';
   if (input.kind === 'diary') {

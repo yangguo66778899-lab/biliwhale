@@ -255,6 +255,30 @@ async function renderOverview() {
     ]),
   ]);
   panel.innerHTML = '<h1>概览</h1>';
+
+  // 首次配置清单：缺什么一眼看到，点一下跳到对应页
+  if (status.setup && !status.setup.ready) {
+    const setup = el('div', { class: 'card setup-card' }, [
+      el('h3', {}, ['还差这些才能正常跑']),
+      el('div', { class: 'hint', text: '「鲸鲸」和「你」是两个号：鲸鲸负责看和发，你是主人（@、私信、聊天都找你）。' }),
+    ]);
+    for (const item of status.setup.items) {
+      setup.appendChild(
+        el('div', { class: 'row' }, [
+          el('span', {}, [`${item.ok ? '✓' : '✗'} ${item.label}`]),
+          el('span', { class: item.ok ? 'mono' : 'mono bad' }, [item.ok ? (item.hint || '已就绪') : item.hint]),
+        ]),
+      );
+    }
+    setup.appendChild(
+      el('div', { class: 'actions' }, [
+        el('button', { class: 'primary', onClick: () => goto('account') }, ['去「账号」页']),
+        el('button', { onClick: () => goto('settings') }, ['去「设置」页']),
+      ]),
+    );
+    panel.appendChild(setup);
+  }
+
   panel.appendChild(head);
 
   if (status.warnings && status.warnings.length > 0) {
@@ -607,8 +631,8 @@ async function renderAccount() {
   panel.appendChild(el('h1', {}, ['账号']));
   panel.appendChild(
     el('div', { class: 'card' }, [
-      el('div', { class: 'row' }, [el('span', {}, ['登录态']), el('span', {}, [account.loggedIn ? `已登录：${account.name || '未知'}` : '未登录'])]),
-      el('div', { class: 'row' }, [el('span', {}, ['UID']), el('span', { class: 'mono' }, [account.mid ? String(account.mid) : '—'])]),
+      el('div', { class: 'row' }, [el('span', {}, ['登录态（鲸鲸）']), el('span', {}, [account.loggedIn ? `已登录：${account.name || '未知'}` : '未登录'])]),
+      el('div', { class: 'row' }, [el('span', {}, ['登录账号 UID']), el('span', { class: 'mono' }, [account.mid ? String(account.mid) : '—'])]),
       el('div', { class: 'row' }, [el('span', {}, ['本地凭据']), el('span', { class: 'mono' }, [account.fingerprint || '—'])]),
       el('div', { class: 'hint', text: account.note || '' }),
       el('div', { class: 'actions' }, [
@@ -618,6 +642,36 @@ async function renderAccount() {
       ]),
     ]),
   );
+
+  // 主人（你）：和登录账号必须是两个号；@、私信、聊天都发给它
+  const owner = account.owner || {};
+  const ownerCard = el('div', { class: 'card' }, [
+    el('h3', {}, ['主人（你）']),
+    el('div', {
+      class: 'hint',
+      text: '这是你自己的 B 站号，不是「鲸鲸」。评论里 @ 谁、私信发给谁、聊天只回谁，都看这里。必须是另一个 UID。',
+    }),
+    el('div', { class: 'row' }, [
+      el('span', {}, ['当前']),
+      el('span', { class: owner.ok && owner.name ? '' : 'warn-text' }, [owner.text || '还没填']),
+    ]),
+    ...(owner.problem ? [el('div', { class: 'hint warn-text', text: owner.problem })] : []),
+  ]);
+  const ownerMidInput = el('input', { type: 'number', placeholder: '你的 UID（数字）', value: account.ownerMidInput || (owner.mid ? String(owner.mid) : '') });
+  const ownerNameInput = el('input', { type: 'text', placeholder: '昵称（@ 用，可留空自动取）', value: owner.name || '' });
+  ownerCard.appendChild(
+    el('div', { class: 'field' }, [el('label', {}, ['主人 UID']), ownerMidInput]),
+  );
+  ownerCard.appendChild(
+    el('div', { class: 'field' }, [el('label', {}, ['主人昵称']), ownerNameInput]),
+  );
+  ownerCard.appendChild(
+    el('div', { class: 'actions' }, [
+      el('button', { class: 'primary', onClick: () => saveOwner(ownerMidInput.value, ownerNameInput.value) }, ['保存主人']),
+      el('button', { onClick: () => lookupOwner(ownerMidInput.value) }, ['按 UID 自动取昵称']),
+    ]),
+  );
+  panel.appendChild(ownerCard);
 
   const qrCard = el('div', { class: 'card', id: 'qr-card' }, [
     el('h3', {}, ['二维码']),
@@ -719,6 +773,36 @@ async function logout() {
     const res = await api('/api/account/logout', { method: 'POST' });
     toast(res.message || '已退出');
     await renderAccount();
+  } catch (err) {
+    toast(String(err.message || err), true);
+  }
+}
+
+/** 保存主人（UID + 昵称）；自己就是登录账号的话服务端会拒绝。 */
+async function saveOwner(midRaw, nameRaw) {
+  const mid = Number(midRaw);
+  if (!Number.isFinite(mid) || mid <= 0) return toast('先填主人 UID（数字）', true);
+  try {
+    const res = await api('/api/config', {
+      method: 'PUT',
+      body: { account: { ownerMid: mid, ownerName: String(nameRaw || '').trim() } },
+    });
+    if (!res.ok) return toast(res.message || '保存失败', true);
+    toast('主人已保存');
+    await renderAccount();
+  } catch (err) {
+    toast(String(err.message || err), true);
+  }
+}
+
+/** 按 UID 自动取昵称（B 站名片接口）；取不到就让用户手填。 */
+async function lookupOwner(midRaw) {
+  const mid = Number(midRaw);
+  if (!Number.isFinite(mid) || mid <= 0) return toast('先填主人 UID', true);
+  try {
+    const res = await api('/api/account/owner', { method: 'POST', body: { mid } });
+    toast(res.message || (res.ok ? '已取到昵称' : '没取到昵称'));
+    if (res.ok) await renderAccount();
   } catch (err) {
     toast(String(err.message || err), true);
   }
@@ -958,7 +1042,8 @@ async function renderDm() {
     el('div', { class: 'card' }, [
       el('div', { class: 'row' }, [el('span', {}, ['监听私信']), el('span', {}, [status.enabled ? '开' : '关（设置 → 监听与回复）'])]),
       el('div', { class: 'row' }, [el('span', {}, ['聊天']), el('span', {}, [status.chat ? '开' : '关'])]),
-      el('div', { class: 'row' }, [el('span', {}, ['发给谁']), el('span', { class: 'mono' }, [status.receiver ? String(status.receiver) : '（还没登录）'])]),
+      el('div', { class: 'row' }, [el('span', {}, ['发给谁（主人）']), el('span', { class: 'mono' }, [status.receiver ? String(status.receiver) : '（还没填主人 UID）'])]),
+      ...(status.ownerOk === false ? [el('div', { class: 'hint warn-text', text: status.ownerProblem || '主人没配好：去「账号」页填主人 UID（必须是另一个号）' })] : []),
       el('div', { class: 'row' }, [
         el('span', {}, ['通知推送']),
         el('span', {}, [status.notifyEnabled ? `开（摘要${status.sendSummary ? '✓' : '✗'} 日记${status.sendDiary ? '✓' : '✗'} 视频${status.sendVideoInfo ? '✓' : '✗'}）` : '关']),
@@ -1174,6 +1259,12 @@ function setPill(text, kind) {
   const pill = $('#pill');
   pill.textContent = text;
   pill.className = `pill ${kind || ''}`;
+}
+
+/** 跳到某个页签（概览里的「去账号页」用它）。 */
+function goto(name) {
+  location.hash = `#/${name}`;
+  void route();
 }
 
 async function boot() {

@@ -15,7 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { AppContext } from '../bootstrap.ts';
-import { bootstrap } from '../bootstrap.ts';
+import { bootstrap, fillOwnerName } from '../bootstrap.ts';
 import { InstanceLock } from '../lifecycle/lock.ts';
 import type { LockInfo } from '../lifecycle/lock.ts';
 import { clearRuntime, newToken, writeHeartbeat, writeRuntime } from '../lifecycle/runtime.ts';
@@ -189,6 +189,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonStart> {
   }
 
   ctx.chat.prune(); // 聊天记录保留 30 天
+  // 主人昵称没填时按 UID 补一次（后台跑，失败就留着让用户手填；夹具模式跳过）
+  void fillOwnerName(ctx).catch((err) => logger.warn('account', `主人昵称自动补全失败：${humanError(err)}`));
   const listen = new ListenLoop({ ctx, ...(opts.now ? { now: opts.now } : {}) });
   listenRef = listen;
   if (!opts.fixtures) listen.start();

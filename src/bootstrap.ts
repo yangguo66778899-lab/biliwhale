@@ -153,6 +153,21 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<AppContext
     state.setModelCache({ name: decision.model, discoveredAt: localIso(), keyFingerprint: keyFingerprint(secrets.apiKey()) });
   }
 
+  // 登录账号的显示字段自动回填（settings 里那两个是「鲸鲸自己」，不是主人）。
+  // 只补空白，不覆盖用户手改过的值；失败不外抛（只是显示）。
+  try {
+    const hint = secrets.accountHint();
+    if (hint.mid && hint.mid > 0) {
+      const cfg = config.get();
+      const patch: { mid?: number; name?: string } = {};
+      if (!cfg.account.mid) patch.mid = hint.mid;
+      if (!cfg.account.name && hint.uname) patch.name = hint.uname;
+      if (Object.keys(patch).length > 0) config.patch({ account: patch });
+    }
+  } catch (err) {
+    logger.warn('core', `登录账号显示字段回填失败（不影响运行）：${String(err)}`);
+  }
+
   return {
     paths,
     logger,
@@ -174,4 +189,27 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<AppContext
     fixtures: opts.fixtures ?? false,
     mockModel: opts.mockModel ?? false,
   };
+}
+
+/**
+ * 主人昵称的自动补全（后台的一次性小动作，不阻塞启动）：
+ * 主人 UID 已填、昵称空着、且不是夹具模式时，按 UID 取一次名片并写回配置。
+ * 取不到就留着空，让用户在面板里手填——不猜、不拿登录账号顶替。
+ */
+export async function fillOwnerName(ctx: AppContext): Promise<void> {
+  if (ctx.fixtures || ctx.mockModel) return;
+  const cfg = ctx.config.get();
+  if (!cfg.account.ownerMid || cfg.account.ownerMid <= 0) return;
+  if (cfg.account.ownerName.trim().length > 0) return;
+  if (cfg.account.ownerMid === ctx.secrets.selfMid()) {
+    ctx.logger.warn('account', '主人 UID 填成了登录账号本身：主人必须是另一个号（去「账号」页改）');
+    return;
+  }
+  const card = await ctx.api.userCard(cfg.account.ownerMid);
+  if (!card.ok) {
+    ctx.logger.warn('account', `没取到主人昵称（${card.error.message}），请在「账号」页手填`);
+    return;
+  }
+  ctx.config.patch({ account: { ownerName: card.data.name } });
+  ctx.logger.info('account', `主人昵称已自动填好：${card.data.name}（${card.data.mid}）`);
 }

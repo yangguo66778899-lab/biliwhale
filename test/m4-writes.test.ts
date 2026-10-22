@@ -50,7 +50,7 @@ function harness(patch: Record<string, unknown> = {}): Harness {
   const config = new ConfigService(dir, logger);
   config.load();
   config.patch({
-    account: { mid: 42, name: '鲸鲸' },
+    account: { mid: 42, name: '鲸鲸', ownerMid: 777, ownerName: '老王' },
     notify: { channels: [{ type: 'dm', enabled: true, sendSummary: true, sendDiary: true, sendVideoInfo: true }] },
     ...patch,
   });
@@ -243,6 +243,7 @@ test('私信通知：三个子开关独立生效', async () => {
   });
   assert.equal(first.sent, 1, '只开摘要 → 只发一条');
   assert.equal(h.transport.calls.length, 1);
+  assert.equal(String(h.transport.calls[0]?.form?.['msg[receiver_id]'] ?? ''), '777', '收件人必须是主人（account.ownerMid），不能是登录账号');
   assert.ok(first.skipped.some((line) => line.includes('日记')));
   assert.ok(first.skipped.some((line) => line.includes('视频')));
 

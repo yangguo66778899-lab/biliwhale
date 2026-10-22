@@ -42,6 +42,12 @@ export interface StatusPayload {
   lastRun: { id: string; status: string; endedAt: string | null; tokens: number } | null;
   today: { wakes: number; targetWakes: number; shares: number; shareCap: number; tokens: number; costCny: number };
   account: { loggedIn: boolean; name?: string; mid?: number };
+  /** 首次配置清单：缺什么、去哪补（概览页顶部会显示）。 */
+  setup?: {
+    ready: boolean;
+    items: Array<{ key: string; label: string; ok: boolean; tab: string; hint: string }>;
+    missing: Array<{ label: string; tab: string; hint: string }>;
+  };
   model: { configured: string; actual: string; discoveredAt: string | null };
   /** M3：待审回复条数（托盘与概览都要显示）。 */
   pending: { count: number };
@@ -106,6 +112,8 @@ export interface PanelHandlers {
   resetConfig(): Promise<ActionResult>;
   models(): unknown;
   account(): unknown;
+  /** 按 UID 取主人昵称并写回配置（主人必须是另一个号）。 */
+  ownerLookup(body: { mid?: number }): Promise<ActionResult & { ownerMid?: number; ownerName?: string }>;
   qrStart(): Promise<QrPayload>;
   qrPoll(key: string): Promise<unknown>;
   saveCookie(cookie: string): Promise<unknown>;
@@ -463,6 +471,15 @@ export class ControlServer {
       const handler = this.handlers.verifyAccount;
       if (!handler) return this.notImplemented(res, 'account/verify');
       this.sendJson(res, 200, await handler());
+      return;
+    }
+
+    if (method === 'POST' && url.pathname === '/api/account/owner') {
+      const handler = this.handlers.ownerLookup;
+      if (!handler) return this.notImplemented(res, 'account/owner');
+      const body = await readJsonBody(req);
+      const mid = isRecord(body) && typeof body.mid === 'number' ? body.mid : undefined;
+      this.sendJson(res, 200, await handler({ mid }));
       return;
     }
 

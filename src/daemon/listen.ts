@@ -16,6 +16,7 @@ import { pollOwnerDm } from '../orchestrator/chat.ts';
 import type { WatchResult } from '../orchestrator/watch.ts';
 import { nextDmDelay, nextWatchDelay } from '../orchestrator/watch.ts';
 import { makeReplyDraft } from '../orchestrator/replyDraft.ts';
+import { approvePending } from '../orchestrator/pending.ts';
 
 export interface ListenDeps {
   ctx: AppContext;
@@ -93,6 +94,19 @@ export class ListenLoop {
               data: { created: watch.created },
             });
           }
+          // 主人直发（listen.reply.ownerDirect）：主人回的评论不走审批，直接回。
+          // 仍然受总写开关/急停/风控冷却/预演约束——approvePending 里统一检查。
+          if (cfg.listen.reply.ownerDirect) {
+            for (const id of watch.createdIds) {
+              const item = this.ctx.pending.byId(id);
+              if (!item?.fromOwner) continue;
+              const approved = await approvePending(this.pendingDeps(), id, {});
+              this.logger.event('listen', approved.ok ? `主人直发：已回（${id}）` : `主人直发没发出去（${id}）：${approved.message}`, {
+                level: approved.ok ? 'info' : 'warn',
+                target: 'listen',
+              });
+            }
+          }
         } catch (err) {
           skipped.push(`评论监听出错：${String(err)}`);
           this.commentIdle += 1;
@@ -130,6 +144,22 @@ export class ListenLoop {
 
     if (skipped.length > 0) result.skipped = skipped;
     return result;
+  }
+
+  /** 审批执行器需要的依赖（主人直发用；和面板「待审」页同一套）。 */
+  private pendingDeps() {
+    return {
+      logger: this.logger,
+      config: this.config.get(),
+      quota: this.ctx.quota,
+      state: this.ctx.state,
+      pending: this.ctx.pending,
+      replied: this.ctx.replied,
+      api: this.ctx.api,
+      writer: this.ctx.writer,
+      secrets: this.ctx.secrets,
+      now: this.now,
+    };
   }
 
   /** 给面板/测试看当前调度状态。 */

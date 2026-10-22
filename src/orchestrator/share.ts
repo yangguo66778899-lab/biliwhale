@@ -22,6 +22,7 @@ import type { BiliWriter, WritePlan } from '../bili/write.ts';
 import type { BiliApi } from '../bili/api.ts';
 import type { ShareProposal } from '../shared/types.ts';
 import { gateShare } from './gate.ts';
+import { resolveOwner } from '../account/owner.ts';
 import type { GateDecision } from './gate.ts';
 import { localIso } from '../shared/time.ts';
 import { humanError } from '../shared/errors.ts';
@@ -52,6 +53,8 @@ export interface ShareDeps {
   writer: BiliWriter;
   api: BiliApi;
   config: Config;
+  /** 登录账号 mid（发送方身份，用来挡「主人 = 自己」）。不传就取不到 → 主人校验会当作未配置。 */
+  selfMid?: () => number;
   now?: () => Date;
   /** 测试用：不发真请求、不等待复核间隔。 */
   verifyDelaysMs?: number[];
@@ -141,7 +144,9 @@ export async function executeShares(deps: ShareDeps, input: ShareInput): Promise
   let writesThisRun = 0;
 
   for (const item of input.items) {
-    const atName = cfg.account.name ?? '';
+    // 主人是「另一个人」：@ 用主人昵称，不用登录账号的昵称。
+    const owner = resolveOwner(cfg, deps.selfMid?.() ?? 0);
+    const atName = owner.name;
     const channel: 'comment' | 'none' = item.share?.channel === 'comment' ? 'comment' : 'none';
 
     const attempt: ShareAttempt = {
@@ -194,6 +199,22 @@ export async function executeShares(deps: ShareDeps, input: ShareInput): Promise
     }
 
     // 闸门过了，才轮到「有没有东西可发」
+    // 评论 @ 是「通知主人」的手段：主人没配好、或昵称没填（@ 不到人）都别发——
+    // 否则就是一条没人被通知到的评论（真机上真的发生过：@ 是空的）。
+    if (attempt.channel === 'comment' && cfg.share.comment.atOwner) {
+      const why = !owner.ok
+        ? owner.problem ?? '主人还没配置'
+        : owner.name.trim().length === 0
+          ? '主人昵称还没填（评论里 @ 不到人）：去面板「账号」页按 UID 自动取，或手填'
+          : null;
+      if (why) {
+        attempt.deny.push(why);
+        report.denied += 1;
+        notes.push(`没发 ${item.bvid}：${why}`);
+        continue;
+      }
+    }
+
     const composed = composeCommentText({
       proposal: item.share,
       atOwner: cfg.share.comment.atOwner,

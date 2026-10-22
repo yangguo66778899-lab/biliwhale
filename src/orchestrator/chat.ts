@@ -26,6 +26,7 @@ import type { ChatStore } from '../state/chatStore.ts';
 import type { SecretsService } from '../config/secrets.ts';
 import type { Paths } from '../state/paths.ts';
 import { localDate, localIso } from '../shared/time.ts';
+import { resolveOwner } from '../account/owner.ts';
 import { extractJson } from '../agent/output.ts';
 
 export interface ChatDeps {
@@ -55,11 +56,13 @@ export interface ChatOutcome {
   refused?: boolean;
 }
 
-/** 主人 mid：配置里的账号 mid 优先，否则取登录态里的自己。 */
+/**
+ * 主人 mid：**只认 `account.ownerMid`**（必须是另一个号）。
+ * 没配/配成登录账号本身 → 0，聊天会明确拒绝并提示去填，不再回退到登录账号。
+ */
 export function ownerMid(deps: ChatDeps): number {
-  const fromConfig = deps.config.account?.mid ?? 0;
-  if (fromConfig > 0) return fromConfig;
-  return deps.secrets.selfMid();
+  const owner = resolveOwner(deps.config, deps.secrets.selfMid());
+  return owner.ok ? owner.mid : 0;
 }
 
 /** 今天的上下文：公开日记 + 报告摘要 + 挑中的 BV（标题也尽量带上）。 */
@@ -167,7 +170,11 @@ export async function handleOwnerMessage(deps: ChatDeps, message: DmMessage): Pr
 
   if (!cfg.listen.dm.enabled) return { replied: false, skipped: '私信监听关着' };
   if (!cfg.listen.dm.chat) return { replied: false, skipped: '聊天关着（只保留发送侧）' };
-  if (owner <= 0) return { replied: false, skipped: '不知道主人是谁（先登录）' };
+  if (owner <= 0) {
+    const problem = resolveOwner(cfg, deps.secrets.selfMid()).problem ?? '主人还没配置';
+    return { replied: false, skipped: `主人不可用：${problem}` };
+  }
+  if (message.senderId === deps.secrets.selfMid()) return { replied: false, skipped: '这是登录账号自己的消息，不是主人' };
   if (message.senderId !== owner) return { replied: false, skipped: '不是主人，不回' };
   if (!message.text.trim()) return { replied: false, skipped: '空消息' };
   if (message.msgKey && deps.chat.repliedKeys().has(message.msgKey)) return { replied: false, skipped: '这条已经回过了' };
@@ -256,7 +263,9 @@ export async function pollOwnerDm(deps: ChatDeps): Promise<{ handled: number; sk
   const skipped: string[] = [];
   if (!cfg.listen.dm.enabled) return { handled: 0, skipped: ['私信监听关着'] };
   const owner = ownerMid(deps);
-  if (owner <= 0) return { handled: 0, skipped: ['不知道主人是谁'] };
+  if (owner <= 0) {
+    return { handled: 0, skipped: [resolveOwner(cfg, deps.secrets.selfMid()).problem ?? '主人还没配置'] };
+  }
 
   const sessions = await deps.api.dmSessions();
   if (!sessions.ok) return { handled: 0, skipped: [`读会话列表失败：${sessions.error.message}`] };

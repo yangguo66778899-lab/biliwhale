@@ -78,7 +78,7 @@ export class SecretsService {
     return '';
   }
 
-  /** 当前登录账号自己的 mid（审批里判断「是不是主人」用）。 */
+  /** 当前登录账号（鲸鲸）自己的 mid：发送方身份、跳过「自己回自己」。主人是另一回事（account.ownerMid）。 */
   selfMid(): number {
     const fromSecrets = Number(this.secrets.bili?.mid ?? 0);
     if (Number.isFinite(fromSecrets) && fromSecrets > 0) return fromSecrets;

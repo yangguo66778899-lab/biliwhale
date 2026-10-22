@@ -56,7 +56,7 @@ function harness(overrides: Record<string, unknown> = {}, opts: { shareEnabled?:
       comment: { maxChars: 150, atOwner: true },
     },
     safety: { writeEnabled: true, dryRun: opts.dryRun ?? false, maxWritesPerDay: opts.maxWrites ?? 10, killSwitch: false },
-    account: { name: opts.accountName ?? '鲸鲸' },
+    account: { mid: 4242, name: opts.accountName ?? '鲸鲸', ownerMid: 777, ownerName: '老王' },
   });
   const cfg = configService.get();
 
@@ -192,7 +192,7 @@ test('成功：发出 + 复核通过 + 记账（rpid/内容/哈希/幂等键）'
   assert.equal(attempt?.status, 'sent');
   assert.equal(attempt?.rpid, '777');
   assert.equal(attempt?.verified, true);
-  assert.ok(attempt?.content.startsWith('@鲸鲸'));
+  assert.ok(attempt?.content.startsWith('@老王'), `应该 @ 主人（老王），实际：${attempt?.content ?? ''}`);
 
   const entry = h.quota.entries().at(-1);
   assert.equal(entry?.status, 'sent');

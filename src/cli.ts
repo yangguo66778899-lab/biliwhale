@@ -45,7 +45,7 @@ interface ParsedArgs {
   trigger: RunTrigger;
 }
 
-const VERSION = '0.5.3-M4';
+const VERSION = '0.6.0-M4';
 
 function parseArgs(argv: string[]): ParsedArgs {
   const args: ParsedArgs = {
@@ -197,9 +197,19 @@ async function commandDoctor(args: ParsedArgs): Promise<number> {
   });
 
   const out = ['', `BiliWhale ${VERSION} · 体检`, `配置模型：${cfg.llm.model}${cfg.llm.modelAuto ? '（自动发现开）' : ''}`, ''];
+  out.push('  首次配置/运行必备：');
+  for (const item of report.required) {
+    const mark = item.ok ? '✓' : '✗';
+    out.push(`  ${mark} ${item.label.padEnd(20, ' ')} ${item.detail}`);
+  }
+  out.push('', '  全部检查项：');
   for (const row of report.rows) {
     const mark = row.level === 'ok' ? '✓' : row.level === 'warn' ? '!' : '✗';
     out.push(`  ${mark} ${row.name.padEnd(12, ' ')} ${row.detail}`);
+  }
+  if (!report.ready) {
+    const missing = report.required.filter((item) => !item.ok).map((item) => item.label);
+    out.push('', `还差：${missing.join('、')}（面板里对应的页签可以补）`);
   }
   out.push('', report.healthy ? '没有硬伤（! 是可降级项）。' : '有硬性项没过（✗），先修它。', '');
   process.stdout.write(out.join('\n'));

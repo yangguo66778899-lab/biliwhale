@@ -18,6 +18,7 @@ import type { BiliWriter } from '../bili/write.ts';
 import type { AppStateStore } from '../state/appState.ts';
 import type { SecretsService } from '../config/secrets.ts';
 import { countChars } from '../bili/write.ts';
+import { resolveOwner } from '../account/owner.ts';
 
 export interface DmVideoBrief {
   bvid: string;
@@ -51,20 +52,19 @@ const MAX_CHARS = 500;
 const MAX_SHARE_VIDEOS = 5;
 const MAX_DIARY_PARTS = 5;
 
-/** 收信人：主人。没有配置主人 mid 就不发（不猜）。 */
+/** 收信人：主人（`account.ownerMid`）。没配/配成登录账号本身 → 0，调用方会拒绝并说明原因。 */
 export function dmReceiver(deps: DmDeps): number {
-  const fromConfig = deps.config.account?.mid ?? 0;
-  if (fromConfig > 0) return fromConfig;
-  return deps.secrets.selfMid();
+  const owner = resolveOwner(deps.config, deps.secrets.selfMid());
+  return owner.ok ? owner.mid : 0;
 }
 
-/** 私信渠道是否可用（enabled + 有主人 mid）。 */
+/** 私信渠道是否可用（enabled + 主人可用）。 */
 export function dmChannel(deps: DmDeps): { enabled: boolean; receiver: number; reason?: string } {
   const channel = (deps.config.notify.channels ?? []).find((item) => item.type === 'dm');
-  const receiver = dmReceiver(deps);
-  if (!channel?.enabled) return { enabled: false, receiver, reason: '通知里的私信渠道关着' };
-  if (receiver <= 0) return { enabled: false, receiver, reason: '不知道发给谁：先登录（面板「账号」页）' };
-  return { enabled: true, receiver };
+  const owner = resolveOwner(deps.config, deps.secrets.selfMid());
+  if (!channel?.enabled) return { enabled: false, receiver: 0, reason: '通知里的私信渠道关着' };
+  if (!owner.ok) return { enabled: false, receiver: 0, reason: owner.problem ?? '主人还没配置' };
+  return { enabled: true, receiver: owner.mid };
 }
 
 /* ---------------- 文案组装（纯函数，好测） ---------------- */
@@ -147,7 +147,7 @@ export async function sendShareDm(
   const channel = dmChannel(deps);
   const receiver = dmReceiver(deps);
   if (receiver <= 0) {
-    result.skipped.push('不知道发给谁：先登录（面板「账号」页）');
+    result.skipped.push(resolveOwner(deps.config, deps.secrets.selfMid()).problem ?? '主人还没配置');
     return result;
   }
 
@@ -188,7 +188,7 @@ export async function sendDmNotify(
   }
   const receiver = dmReceiver(deps);
   if (receiver <= 0) {
-    result.skipped.push('不知道发给谁：先登录（面板「账号」页）');
+    result.skipped.push(resolveOwner(deps.config, deps.secrets.selfMid()).problem ?? '主人还没配置');
     return result;
   }
   const sender = deps.secrets.selfMid();

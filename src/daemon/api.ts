@@ -23,7 +23,8 @@ import { localDate, localIso } from '../shared/time.ts';
 import { humanError } from '../shared/errors.ts';
 import { encodeQr, matrixToRows } from '../qr/encoder.ts';
 import { buildDiagBundle, diagFileName } from '../diagnostics.ts';
-import { approvePending, rejectPending, scanStrangerReplies } from '../orchestrator/pending.ts';
+import { approvePending, autoApproveOwnerDrafts, rejectPending, scanStrangerReplies } from '../orchestrator/pending.ts';
+import { describeOwner, resolveOwner } from '../account/owner.ts';
 import { makeReplyDraft } from '../orchestrator/replyDraft.ts';
 import { discoverModel, keyFingerprint } from '../llm/discovery.ts';
 import { SPEC } from '../config/spec.ts';
@@ -94,12 +95,51 @@ export function createHandlers(deps: PanelDeps): AllHandlers {
       const pendingCount = ctx.pending.count();
       if (pendingCount > 0) warnings.push(`有 ${pendingCount} 条陌生人回复在等你决定（面板「待审」页）`);
 
+      // 首次配置清单（便宜的那几项；磁盘/模型等重检查在体检里）
+      const owner = resolveOwner(cfg, ctx.secrets.selfMid());
+      const setup: Array<{ key: string; label: string; ok: boolean; tab: string; hint: string }> = [
+        {
+          key: 'apikey',
+          label: 'DeepSeek key',
+          ok: ctx.secrets.hasApiKey(),
+          tab: 'settings',
+          hint: '没有它跑不了任何一轮（预演也要真调模型）',
+        },
+        {
+          key: 'login',
+          label: 'B 站登录（鲸鲸）',
+          ok: ctx.secrets.hasCookie(),
+          tab: 'account',
+          hint: '不登录：字幕拿不到、写不了',
+        },
+        {
+          key: 'owner',
+          label: '主人 UID（另一个号）',
+          ok: owner.ok && owner.mid > 0,
+          tab: 'account',
+          hint: owner.problem ?? '评论 @、私信、聊天都发给它',
+        },
+        {
+          key: 'ownerName',
+          label: '主人昵称（@ 用）',
+          ok: owner.ok && owner.name.length > 0,
+          tab: 'account',
+          hint: '留空时评论里 @ 不到人；可按 UID 自动取',
+        },
+      ];
+      const missing = setup.filter((item) => !item.ok);
+
       return {
         scheduler: {
           plan: summarizePlan(plan),
           paused: state.paused,
           nextWakeAt: nextWakeIso(),
           planSource: state.today?.reason ?? null,
+        },
+        setup: {
+          ready: missing.length === 0,
+          items: setup,
+          missing: missing.map((item) => ({ label: item.label, tab: item.tab, hint: item.hint })),
         },
         lastRun: last ? { id: last.id, status: last.status, endedAt: last.endedAt, tokens: last.model.promptTokens + last.model.completionTokens } : null,
         today: {
@@ -232,15 +272,41 @@ export function createHandlers(deps: PanelDeps): AllHandlers {
     account() {
       const hint = ctx.secrets.accountHint();
       const cfg = ctx.config.get();
+      const owner = resolveOwner(cfg, ctx.secrets.selfMid());
       return {
+        // 「鲸鲸」自己的号（登录账号，发送方身份）
         loggedIn: hint.hasCookie,
         fingerprint: hint.fingerprint,
-        name: hint.uname ?? cfg.account.name ?? null,
+        name: hint.uname ?? (cfg.account.name || null),
         mid: hint.mid ?? (cfg.account.mid || null),
         configMid: cfg.account.mid,
         configName: cfg.account.name,
+        // 主人（你）：@、私信、聊天都发给它；和登录账号必须是两个号
+        owner: {
+          mid: owner.mid || null,
+          name: owner.name || null,
+          ok: owner.ok,
+          problem: owner.problem ?? null,
+          text: describeOwner(owner),
+          sameAsLogin: owner.mid > 0 && owner.mid === hint.mid,
+        },
         note: '凭据只存在本机 secrets.json，面板不回显原值',
       };
+    },
+
+    /** 按 UID 取主人昵称并写回配置（面板「账号」页的按钮；取不到就让用户手填）。 */
+    async ownerLookup(body: { mid?: number }) {
+      const mid = Number(body.mid ?? ctx.config.get().account.ownerMid ?? 0);
+      if (!Number.isFinite(mid) || mid <= 0) return { ok: false, message: '先填主人 UID' };
+      const selfMid = ctx.secrets.selfMid();
+      if (selfMid > 0 && mid === selfMid) {
+        return { ok: false, message: `这个 UID 是登录账号（${selfMid}）自己：主人必须是另一个号` };
+      }
+      const card = await ctx.api.userCard(mid);
+      if (!card.ok) return { ok: false, message: `没取到昵称：${card.error.message}（可以手填）` };
+      ctx.config.patch({ account: { ownerMid: card.data.mid, ownerName: card.data.name } });
+      ctx.logger.event('account', `主人昵称已按 UID 自动填好：${card.data.name}（${card.data.mid}）`, { target: 'account' });
+      return { ok: true, message: `主人：${card.data.name}（${card.data.mid}）`, ownerMid: card.data.mid, ownerName: card.data.name };
     },
 
     async qrStart(): Promise<QrPayload> {
@@ -477,22 +543,22 @@ export function createHandlers(deps: PanelDeps): AllHandlers {
     },
 
     async scanPending() {
-      const result = await scanStrangerReplies(
-        {
-          logger: ctx.logger,
-          config: ctx.config.get(),
-          quota: ctx.quota,
-          state: ctx.state,
-          pending: ctx.pending,
-          replied: ctx.replied,
-          api: ctx.api,
-          writer: ctx.writer,
-          secrets: ctx.secrets,
-          draft: makeReplyDraft(ctx.llm, ctx.logger),
-        },
-        { maxPerRound: Math.max(1, ctx.config.get().listen.reply.maxPerRound) },
-      );
-      return result;
+      const pendingDeps = {
+        logger: ctx.logger,
+        config: ctx.config.get(),
+        quota: ctx.quota,
+        state: ctx.state,
+        pending: ctx.pending,
+        replied: ctx.replied,
+        api: ctx.api,
+        writer: ctx.writer,
+        secrets: ctx.secrets,
+        draft: makeReplyDraft(ctx.llm, ctx.logger),
+      };
+      const result = await scanStrangerReplies(pendingDeps, { maxPerRound: Math.max(1, ctx.config.get().listen.reply.maxPerRound) });
+      // 主人直发：扫到「主人回的」就不排队，直接回（仍受同一套写开关约束）
+      const auto = await autoApproveOwnerDrafts(pendingDeps, result.created);
+      return { ...result, ownerAuto: auto };
     },
 
     async deleteComment(bvid: string, rpid: string, dryRun = false) {
@@ -508,11 +574,14 @@ export function createHandlers(deps: PanelDeps): AllHandlers {
     dm() {
       const cfg = ctx.config.get();
       const channel = (cfg.notify.channels ?? []).find((item) => item.type === 'dm');
-      const receiver = cfg.account?.mid && cfg.account.mid > 0 ? cfg.account.mid : ctx.secrets.selfMid();
+      const owner = resolveOwner(cfg, ctx.secrets.selfMid());
+      const receiver = owner.ok ? owner.mid : 0;
       return {
         enabled: cfg.listen.dm.enabled,
         chat: cfg.listen.dm.chat,
-        ownerMid: receiver,
+        ownerMid: owner.mid || null,
+        ownerOk: owner.ok,
+        ownerProblem: owner.problem ?? null,
         receiver,
         notifyEnabled: Boolean(channel?.enabled),
         sendSummary: Boolean(channel?.sendSummary),

@@ -263,7 +263,8 @@ test('账号页：粘贴 cookie 会打 /api/account/cookie', async () => {
   const panel = h.bySelector.get('#panel-account');
   assert.ok(panel);
 
-  const save = buttons(panel).find((button) => textOf(button).includes('保存'));
+  // 账号页现在有两组「保存」：主人卡片(保存主人) 与 cookie 卡片(保存并验证)；这里要的是后者
+  const save = buttons(panel).find((button) => textOf(button).includes('保存并验证'));
   assert.ok(save, `找不到保存按钮：${buttons(panel).map(textOf).join(' / ')}`);
   save.click();
   for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setImmediate(resolve));

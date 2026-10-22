@@ -8,6 +8,9 @@ import type { ChatDeps } from '../src/orchestrator/chat.ts';
 import { nextDmDelay, nextWatchDelay, watchComments } from '../src/orchestrator/watch.ts';
 import type { WatchDeps } from '../src/orchestrator/watch.ts';
 import { ChatStore } from '../src/state/chatStore.ts';
+import { autoApproveOwnerDrafts } from '../src/orchestrator/pending.ts';
+import type { PendingDeps } from '../src/orchestrator/pending.ts';
+import { RepliedLedger } from '../src/state/replied.ts';
 import { PendingStore } from '../src/state/pending.ts';
 import { QuotaLedger } from '../src/state/ledgers.ts';
 import { AppStateStore } from '../src/state/appState.ts';
@@ -59,7 +62,7 @@ function harness(patch: Record<string, unknown> = {}): Harness {
   const config = new ConfigService(dir, logger);
   config.load();
   config.patch({
-    account: { mid: 4242, name: '鲸鲸' },
+    account: { mid: 4242, name: '鲸鲸', ownerMid: 777, ownerName: '老王' },
     listen: {
       dm: { enabled: true, intervalSec: 30, ownerOnly: true, chat: true, maxHistory: 5, maxPerHour: 20, maxChars: 500 },
       comment: { enabled: true, intervalSec: 300, scope: 'both', allDay: false, oncePerPerson: false },
@@ -142,7 +145,7 @@ function harness(patch: Record<string, unknown> = {}): Harness {
 }
 
 function ownerMessage(over: Partial<DmMessage> = {}): DmMessage {
-  return { senderId: 4242, receiverId: 0, text: '在吗', atMs: Date.now(), msgKey: 'k1', ...over };
+  return { senderId: 777, receiverId: 4242, text: '在吗', atMs: Date.now(), msgKey: 'k1', ...over };
 }
 
 /* ---------------- 聊天 ---------------- */
@@ -154,6 +157,22 @@ test('聊天只认主人：陌生人来信不回、不记账、不发请求', as
   assert.match(out.skipped ?? '', /不是主人/);
   assert.equal(h.transport.calls.length, 0);
   assert.equal(h.chat.all().length, 0);
+});
+
+test('聊天只认主人：登录账号（鲸鲸）自己的来信不算主人，不回', async () => {
+  const h = harness();
+  const out = await handleOwnerMessage({ ...h.deps, config: h.config.get() }, ownerMessage({ senderId: 4242 }));
+  assert.equal(out.replied, false);
+  assert.match(out.skipped ?? '', /登录账号自己/);
+  assert.equal(h.transport.calls.length, 0);
+});
+
+test('聊天只认主人：没填主人 UID 时明确拒绝，并说清去哪填', async () => {
+  const h = harness({ account: { mid: 4242, name: '鲸鲸', ownerMid: 0, ownerName: '' } });
+  const out = await handleOwnerMessage({ ...h.deps, config: h.config.get() }, ownerMessage({ senderId: 777 }));
+  assert.equal(out.replied, false);
+  assert.match(out.skipped ?? '', /还没填主人 UID/);
+  assert.equal(h.transport.calls.length, 0);
 });
 
 test('聊天：开关关着就不处理', async () => {
@@ -302,6 +321,78 @@ test('评论监听：第二次只处理游标之后的；陌生人进待审队�
   assert.equal(h.pending.all()[0]?.target.uname, '路人甲');
 });
 
+test('评论监听：主人（ownerMid）的回复标成 fromOwner；登录账号自己的消息跳过', async () => {
+  const h = harness();
+  h.state.setCommentSeenAt('2026-10-21T19:00:00+08:00');
+  const api = {
+    msgfeedReplies: async () => ({
+      ok: true,
+      data: [
+        feedItem({ id: 1, mid: 777, uname: '老王', sourceRpid: '301' }),
+        feedItem({ id: 2, mid: 4242, uname: '鲸鲸', sourceRpid: '302' }),
+      ],
+    }),
+    msgfeedAts: async () => ({ ok: true, data: [] }),
+  };
+  const result = await watchComments({ ...h.watch, config: h.config.get(), api: api as unknown as WatchDeps['api'] });
+  assert.equal(result.created, 1, '只应给主人建一条草稿（自己的消息跳过）');
+  const draft = h.pending.all()[0];
+  assert.equal(draft?.fromOwner, true, '要标清楚这是主人回的，主人直发靠它判断');
+  assert.ok(result.skipped.some((line) => line.includes('登录账号自己的消息')));
+});
+
+test('评论监听：主人直发关着时，主人的回复也进队列等审批（不自动发）', async () => {
+  const h = harness();
+  h.state.setCommentSeenAt('2026-10-21T19:00:00+08:00');
+  const api = {
+    msgfeedReplies: async () => ({ ok: true, data: [feedItem({ mid: 777, uname: '老王' })] }),
+    msgfeedAts: async () => ({ ok: true, data: [] }),
+  };
+  await watchComments({ ...h.watch, config: h.config.get(), api: api as unknown as WatchDeps['api'] });
+  assert.equal(h.transport.calls.length, 0, '没点批准之前不该有任何写请求');
+  assert.equal(h.pending.pending().length, 1);
+});
+
+test('主人直发：ownerDirect 打开时，主人的回复直接发出，陌生人仍然排队', async () => {
+  const h = harness({
+    listen: {
+      dm: { enabled: true, intervalSec: 30, ownerOnly: true, chat: true, maxHistory: 5, maxPerHour: 20, maxChars: 500 },
+      comment: { enabled: true, intervalSec: 300, scope: 'both', allDay: false, oncePerPerson: false },
+      reply: { ownerDirect: true, strangerApproval: true, maxPerRound: 1, maxChars: 100 },
+    },
+  });
+  h.state.setCommentSeenAt('2026-10-21T19:00:00+08:00');
+  const api = {
+    msgfeedReplies: async () => ({
+      ok: true,
+      data: [
+        feedItem({ id: 1, mid: 777, uname: '老王', sourceRpid: '401' }),
+        feedItem({ id: 2, mid: 888, uname: '路人甲', sourceRpid: '402' }),
+      ],
+    }),
+    msgfeedAts: async () => ({ ok: true, data: [] }),
+  };
+  const watch = await watchComments({ ...h.watch, config: h.config.get(), api: api as unknown as WatchDeps['api'] });
+  assert.equal(watch.created, 2);
+
+  const pendingDeps = {
+    logger: h.deps.logger,
+    config: h.config.get(),
+    quota: h.quota,
+    state: h.state,
+    pending: h.pending,
+    replied: RepliedLedger.open(h.paths.replied, h.deps.logger),
+    api: api as unknown as WatchDeps['api'] as unknown as PendingDeps['api'],
+    writer: h.writer,
+    secrets: h.secrets,
+  };
+  const auto = await autoApproveOwnerDrafts(pendingDeps, h.pending.all());
+  assert.equal(auto.approved.length, 1, '只直发主人那条');
+  assert.ok(h.transport.calls.some((call) => String(call.url).includes('/x/v2/reply/add')), '主人那条应该真的发了');
+  const strangers = h.pending.all().filter((item) => !item.fromOwner);
+  assert.equal(strangers.every((item) => item.status === 'pending'), true, '陌生人的回复仍然要审批');
+});
+
 test('评论监听：关着就一次请求都不发', async () => {
   const h = harness({ listen: { comment: { enabled: false, intervalSec: 300, scope: 'both', allDay: false, oncePerPerson: false } } });
   const api = {
@@ -371,9 +462,15 @@ test('私信轮询：只有主人的会话会被处理', async () => {
   assert.equal(h.transport.calls.length, 1, '只回了一条');
 });
 
-test('ownerMid：配置里没有就用登录态里的自己；都没有就 0', () => {
+test('ownerMid：只认 account.ownerMid；没填 / 填成登录账号本身都算 0（不回退）', () => {
   const h = harness();
-  assert.equal(ownerMid({ ...h.deps, config: h.config.get() }), 4242);
-  const zero = harness({ account: { mid: 0, name: '' } });
-  assert.equal(ownerMid({ ...zero.deps, config: zero.config.get() }), 4242, '回落到登录态');
+  assert.equal(ownerMid({ ...h.deps, config: h.config.get() }), 777, '主人是配置里的 ownerMid，不是登录账号');
+
+  // 没填主人 UID → 0（以前会悄悄回退到登录账号，这就是错的）
+  const missing = harness({ account: { mid: 4242, name: '鲸鲸', ownerMid: 0, ownerName: '' } });
+  assert.equal(ownerMid({ ...missing.deps, config: missing.config.get() }), 0);
+
+  // 填成登录账号自己 → 也算没配好
+  const same = harness({ account: { mid: 4242, name: '鲸鲸', ownerMid: 4242, ownerName: '鲸鲸' } });
+  assert.equal(ownerMid({ ...same.deps, config: same.config.get() }), 0);
 });

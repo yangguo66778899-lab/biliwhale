@@ -1,6 +1,6 @@
 {
   "name": "biliwhale",
-  "version": "0.5.3",
+  "version": "0.6.0",
   "private": true,
   "description": "常驻 Windows 的 B 站「养鱼」程序内核：有自己的作息，只调用 DeepSeek，零 Python、零 DSH 依赖",
   "type": "module",
