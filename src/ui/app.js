@@ -945,6 +945,97 @@ async function scanPending() {
   }
 }
 
+/* ---------------- 私聊 ---------------- */
+
+async function renderDm() {
+  const panel = $('#panel-dm');
+  panel.innerHTML = '<h1>私聊</h1><div class="card">读取中…</div>';
+  const [status, chat] = await Promise.all([api('/api/dm'), api('/api/dm/chat?limit=100')]);
+
+  panel.innerHTML = '';
+  panel.appendChild(el('h1', {}, ['私聊']));
+  panel.appendChild(
+    el('div', { class: 'card' }, [
+      el('div', { class: 'row' }, [el('span', {}, ['监听私信']), el('span', {}, [status.enabled ? '开' : '关（设置 → 监听与回复）'])]),
+      el('div', { class: 'row' }, [el('span', {}, ['聊天']), el('span', {}, [status.chat ? '开' : '关'])]),
+      el('div', { class: 'row' }, [el('span', {}, ['发给谁']), el('span', { class: 'mono' }, [status.receiver ? String(status.receiver) : '（还没登录）'])]),
+      el('div', { class: 'row' }, [
+        el('span', {}, ['通知推送']),
+        el('span', {}, [status.notifyEnabled ? `开（摘要${status.sendSummary ? '✓' : '✗'} 日记${status.sendDiary ? '✓' : '✗'} 视频${status.sendVideoInfo ? '✓' : '✗'}）` : '关']),
+      ]),
+      el('div', { class: 'row' }, [el('span', {}, ['最近一小时']), el('span', {}, [`发了 ${status.sentLastHour} 条（上限 ${status.maxPerHour}）`])]),
+      el('div', { class: 'hint', text: '聊天只认主人：陌生人的私信不回、不记账。它只聊天，不能改设置、跑一轮、发评论或给别人发私信。' }),
+    ]),
+  );
+
+  const sendCard = el('div', { class: 'card' }, [
+    el('h3', {}, ['手动发一条']),
+    el('div', { class: 'inline' }, [
+      el('button', { onClick: () => dmSend({ kind: 'diary' }) }, ['发今天的公开日记']),
+      el('button', { onClick: () => dmSend({ kind: 'video_info' }) }, ['发今天的视频信息']),
+      el('button', { class: 'danger', onClick: () => dmClear() }, ['清空聊天记录']),
+    ]),
+    el('div', { class: 'hint', text: '「发视频信息」只发今天报告里出现过的 BV；不认识的一律说没有。' }),
+  ]);
+  const input = el('input', { type: 'text', placeholder: '发一条测试消息（回车发送）' });
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && input.value.trim()) dmSend({ text: input.value.trim() });
+  });
+  sendCard.appendChild(input);
+  panel.appendChild(sendCard);
+
+  const hist = el('div', { class: 'card' }, [el('h3', {}, [`聊天记录（${chat.total} 条）`])]);
+  const list = el('div', { class: 'list' });
+  for (const line of chat.items || []) {
+    list.appendChild(
+      el('div', { class: 'item' }, [
+        el('span', { class: 'mono' }, [`${line.from === 'owner' ? '主人' : '我'} · ${new Date(line.at).toLocaleString()}`]),
+        el('span', {}, [line.text.slice(0, 120)]),
+      ]),
+    );
+  }
+  if (!chat.items || chat.items.length === 0) list.appendChild(el('div', { class: 'item' }, [el('span', {}, ['还没有聊过'])]));
+  hist.appendChild(list);
+  panel.appendChild(hist);
+}
+
+async function dmSend(body) {
+  try {
+    const payload = { ...body };
+    if (body.kind === 'video_info') {
+      const reports = await api('/api/reports');
+      const latest = reports.items && reports.items[0];
+      if (!latest) {
+        toast('今天还没有报告，没有视频信息可发', true);
+        return;
+      }
+      const doc = await api(`/api/reports/${encodeURIComponent(latest.date)}`);
+      const match = /(BV[0-9A-Za-z]{10})/.exec(doc.markdown);
+      if (!match) {
+        toast('今天的报告里没有挑中的视频', true);
+        return;
+      }
+      payload.bvid = match[1];
+    }
+    const res = await api('/api/dm/send', { method: 'POST', body: payload });
+    toast(res.message || (res.ok ? '已发送' : '没发出去'), !res.ok);
+    await renderDm();
+  } catch (err) {
+    toast(String(err.message || err), true);
+  }
+}
+
+async function dmClear() {
+  if (!confirm('清空聊天记录？（只删本机的记录，B 站那边不动）')) return;
+  try {
+    const res = await api('/api/dm/chat/clear', { method: 'POST' });
+    toast(res.message || '已清空');
+    await renderDm();
+  } catch (err) {
+    toast(String(err.message || err), true);
+  }
+}
+
 /* ---------------- 日志 ---------------- */
 
 async function renderLogs() {
@@ -1055,6 +1146,7 @@ const routes = {
   reports: renderReports,
   diaries: renderDiaries,
   pending: renderPending,
+  dm: renderDm,
   logs: renderLogs,
   about: renderAbout,
 };

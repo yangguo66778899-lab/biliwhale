@@ -163,6 +163,23 @@ export class AppStateStore {
     this.update((state) => ({ ...state, modelCache: cache }));
   }
 
+  /** 监听游标：「评论/@」与「私信」各自一条，首次运行只建基线、不倒历史。 */
+  lastCommentSeenAt(): string | null {
+    return this.store.get().cursors?.lastCommentSeenAt ?? null;
+  }
+
+  lastDmSeenAt(): string | null {
+    return this.store.get().cursors?.lastDmSeenAt ?? null;
+  }
+
+  setCommentSeenAt(atIso: string | null): void {
+    this.update((state) => ({ ...state, cursors: { ...state.cursors, lastCommentSeenAt: atIso } }));
+  }
+
+  setDmSeenAt(atIso: string | null): void {
+    this.update((state) => ({ ...state, cursors: { ...state.cursors, lastDmSeenAt: atIso } }));
+  }
+
   setRiskCooldown(untilIso: string | null): void {
     this.update((state) => ({ ...state, riskCooldownUntil: untilIso }));
   }

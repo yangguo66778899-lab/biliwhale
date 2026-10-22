@@ -21,6 +21,7 @@ import type { Transport } from './bili/http.ts';
 import { BiliWriter } from './bili/write.ts';
 import { PendingStore } from './state/pending.ts';
 import { RepliedLedger } from './state/replied.ts';
+import { ChatStore } from './state/chatStore.ts';
 import { LlmClient } from './llm/client.ts';
 import { discoverModel, keyFingerprint } from './llm/discovery.ts';
 import { ensurePromptFiles } from './agent/prompts.ts';
@@ -54,6 +55,8 @@ export interface AppContext {
   pending: PendingStore;
   /** 谁回过我们。 */
   replied: RepliedLedger;
+  /** 和主人的聊天记录（chat/owner.jsonl）。 */
+  chat: ChatStore;
   /** 原始传输层（登录要读 Set-Cookie）。 */
   transport: Transport;
   llm: LlmClient;
@@ -164,6 +167,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<AppContext
     writer,
     pending: PendingStore.open(paths.pendingReplies, logger),
     replied: RepliedLedger.open(paths.replied, logger),
+    chat: new ChatStore(paths.chatOwner, logger),
     transport,
     llm,
     configuredModel,

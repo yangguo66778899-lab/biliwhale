@@ -45,6 +45,9 @@ import type { GateDecision } from './gate.ts';
 import { executeShares, summarizeShares } from './share.ts';
 import type { ShareAttempt } from './share.ts';
 import { scanStrangerReplies } from './pending.ts';
+import { sendShareDm, sendDmNotify } from './dm.ts';
+import { executeFavorites } from './fav.ts';
+import { likeVideo } from './like.ts';
 import { buildDeepPrompt, buildScreenPrompt, clip, pickDeepReads } from './prompts.ts';
 import { appendNotifyLog, writeArchive, writeDiary, writeReport, videoUrl, skipReasonText } from './writers.ts';
 import { buildSystemMessage, buildUserPreamble, loadPromptAssets } from '../agent/prompts.ts';
@@ -514,6 +517,86 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
   }
   if (shareReport.stopped === 'risk') errors.push('撞风控：本轮已停写，冷却期内不再发');
 
+  // ---------------------------------------------------------------- 私信分享（M4：share.via=dm）
+  // 与评论分享走同一道闸门，但**合并成一条**发出一轮挑中的视频；占分享额度。
+  if (cfg.share.enabled && cfg.share.via === 'dm') {
+    try {
+      const dmItems = result.selected.map((item) => {
+        const meta = videos.get(item.bvid);
+        return {
+          bvid: item.bvid,
+          title: meta?.title ?? item.bvid,
+          desc: '',
+          understanding: item.oneliner || item.why,
+        };
+      });
+      const dm = await sendShareDm(
+        { logger, config: cfg, writer: deps.writer, state: deps.state, secrets: deps.secrets, now },
+        { items: dmItems, dryRun: effectiveDryRun },
+      );
+      if (dm.ok) {
+        counts.shared += dm.dryRun ? 0 : dm.sent;
+        deps.quota.add({
+          at: localIso(now()),
+          type: 'dm',
+          bvid: dmItems[0]?.bvid ?? '',
+          target: String(cfg.account.mid || deps.secrets.selfMid()),
+          share: true,
+          status: dm.dryRun ? 'dry_run' : 'sent',
+          content: dm.texts[0] ?? '',
+          ...(dm.dryRun ? {} : { verifiedAt: localIso(now()) }),
+        });
+        notes.push(dm.dryRun ? '预演私信分享（未发送）' : `私信分享已发（合并 ${dmItems.length} 条视频）`);
+      } else {
+        notes.push(`私信分享没发：${dm.error ?? (dm.skipped.join('；') || '未知原因')}`);
+      }
+    } catch (err) {
+      notes.push(`私信分享出错（不影响本轮）：${humanError(err)}`);
+    }
+  }
+
+  // ---------------------------------------------------------------- 收藏（M4，默认开）
+  if (cfg.fav.enabled && result.favorite) {
+    try {
+      const favAid = videosAid(deepReads, result.favorite.bvid);
+      const sameKindCount = deps.quota.countOn(date, 'fav');
+      const fav = await executeFavorites(
+        { logger, config: cfg, quota: deps.quota, state: deps.state, writer: deps.writer, api: deps.api, now },
+        {
+          items: [
+            {
+              bvid: result.favorite.bvid,
+              aid: favAid,
+              reason: result.favorite.reason,
+              sameKindCount,
+              inDeepRead: ctxForResult.deepReadBvids.has(result.favorite.bvid),
+            },
+          ],
+          dryRun: effectiveDryRun,
+        },
+      );
+      for (const line of fav.notes) notes.push(line);
+    } catch (err) {
+      notes.push(`收藏出错（不影响本轮）：${humanError(err)}`);
+    }
+  }
+
+  // ---------------------------------------------------------------- 点赞（M4，默认关）
+  if (cfg.like.enabled && result.selected.length > 0) {
+    try {
+      const first = result.selected[0];
+      if (first) {
+        const like = await likeVideo(
+          { logger, config: cfg, quota: deps.quota, state: deps.state, writer: deps.writer, now },
+          { bvid: first.bvid, aid: videosAid(deepReads, first.bvid), inDeepRead: ctxForResult.deepReadBvids.has(first.bvid), dryRun: effectiveDryRun },
+        );
+        notes.push(like.ok ? `点赞：${like.note}` : `没点赞：${like.note}`);
+      }
+    } catch (err) {
+      notes.push(`点赞出错（不影响本轮）：${humanError(err)}`);
+    }
+  }
+
   // 陌生人回复：把我们评论下的新回复落成待审草稿（M3 只建队列，不自动回）
   if (cfg.listen.reply.strangerApproval && shareReport.sent > 0 && !effectiveDryRun) {
     try {
@@ -604,6 +687,44 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
     });
   }
   markPhase('persist', Date.now() - phase8, 'ok');
+
+  // ---------------------------------------------------------------- 私信通知（M4）
+  // 只用本轮已有的数据：摘要、今天的公开日记、挑中的视频（标题/链接/一句话）。
+  // **不为这段再跑模型、不再请求 B 站**；视频信息只允许本轮出现过的 BV。
+  const dmChannelOn = (cfg.notify.channels ?? []).some((channel) => channel.type === 'dm' && channel.enabled);
+  if (dmChannelOn) {
+    try {
+      const allowBvids = new Set<string>([
+        ...result.selected.map((item) => item.bvid),
+        ...result.skipped.map((item) => item.bvid),
+        ...collected.candidates.map((candidate) => candidate.video.bvid),
+      ]);
+      const dmVideos = result.selected.slice(0, 3).map((item) => {
+        const meta = videos.get(item.bvid);
+        return {
+          bvid: item.bvid,
+          title: meta?.title ?? item.bvid,
+          desc: deepReads.find((read) => read.bvid === item.bvid)?.video.desc ?? '',
+          understanding: item.oneliner || item.why,
+        };
+      });
+      const dm = await sendDmNotify(
+        { logger, config: cfg, writer: deps.writer, state: deps.state, secrets: deps.secrets, now },
+        {
+          summary: result.notify,
+          publicDiary: result.diary.public,
+          videos: dmVideos,
+          allowBvids,
+          dryRun: effectiveDryRun,
+        },
+      );
+      if (dm.sent > 0) notes.push(`私信通知已发 ${dm.sent} 条`);
+      for (const line of dm.skipped) notes.push(`私信通知：${line}`);
+      if (dm.error) notes.push(`私信通知失败：${dm.error}`);
+    } catch (err) {
+      notes.push(`私信通知出错（不影响本轮）：${humanError(err)}`);
+    }
+  }
 
   // ---------------------------------------------------------------- Phase 9 通知
   const phase9 = Date.now();

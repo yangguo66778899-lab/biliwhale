@@ -125,6 +125,13 @@ export interface PanelHandlers {
   scanPending(): Promise<unknown>;
   /** M3：删自己发过的评论（面板手动、二次确认）。 */
   deleteComment(bvid: string, rpid: string, dryRun?: boolean): Promise<ActionResult>;
+  /** M4：私聊状态、聊天记录、手动发送（测试/日记/视频信息）、清空记录。 */
+  dm(): unknown;
+  dmChat(limit: number): unknown;
+  dmSend(body: { text?: string; kind?: 'diary' | 'video_info'; bvid?: string }): Promise<ActionResult>;
+  dmClear(): { ok: boolean; message: string };
+  /** M4：立刻跑一次监听（测试与手动触发）。 */
+  listenNow(): Promise<unknown>;
   /** DeepSeek key 的状态（只给指纹，绝不回显原值）。 */
   secretsStatus(): { hasApiKey: boolean; fingerprint: string; source: 'env' | 'file' | 'none' };
   /** 在面板里填/换 DeepSeek key，保存后立刻验证并生效。 */
@@ -553,6 +560,52 @@ export class ControlServer {
       if (!handler) return this.notImplemented(res, 'comments/delete');
       const result = await handler(deleteMatch[1] ?? '', decodeURIComponent(deleteMatch[2] ?? ''), false);
       this.sendJson(res, result.ok ? 200 : 409, result);
+      return;
+    }
+
+    /* ---- 私聊（M4） ---- */
+
+    if (method === 'GET' && url.pathname === '/api/dm') {
+      const handler = this.handlers.dm;
+      if (!handler) return this.notImplemented(res, 'dm');
+      this.sendJson(res, 200, { ok: true, ...(handler() as object) });
+      return;
+    }
+
+    if (method === 'GET' && url.pathname === '/api/dm/chat') {
+      const handler = this.handlers.dmChat;
+      if (!handler) return this.notImplemented(res, 'dm/chat');
+      const limit = clamp(Number(url.searchParams.get('limit') ?? 50), 1, 500);
+      this.sendJson(res, 200, { ok: true, ...(handler(limit) as object) });
+      return;
+    }
+
+    if (method === 'POST' && url.pathname === '/api/dm/send') {
+      const handler = this.handlers.dmSend;
+      if (!handler) return this.notImplemented(res, 'dm/send');
+      const body = await readJsonBody(req);
+      if (!isRecord(body)) return this.sendJson(res, 400, { ok: false, message: '请求体要是对象' });
+      const kind = body.kind === 'diary' || body.kind === 'video_info' ? body.kind : undefined;
+      const result = await handler({
+        ...(typeof body.text === 'string' ? { text: body.text } : {}),
+        ...(kind ? { kind } : {}),
+        ...(typeof body.bvid === 'string' ? { bvid: body.bvid } : {}),
+      });
+      this.sendJson(res, result.ok ? 200 : 409, result);
+      return;
+    }
+
+    if (method === 'POST' && url.pathname === '/api/dm/chat/clear') {
+      const handler = this.handlers.dmClear;
+      if (!handler) return this.notImplemented(res, 'dm/chat/clear');
+      this.sendJson(res, 200, handler());
+      return;
+    }
+
+    if (method === 'POST' && url.pathname === '/api/listen/now') {
+      const handler = this.handlers.listenNow;
+      if (!handler) return this.notImplemented(res, 'listen/now');
+      this.sendJson(res, 200, { ok: true, result: await handler() });
       return;
     }
 

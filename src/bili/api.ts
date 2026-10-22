@@ -302,6 +302,178 @@ export class BiliApi implements WbiProvider {
     if (!expected) return { ok: true, data: true };
     return { ok: true, data: matched.message.includes(expected.slice(0, 20)) };
   }
+
+  /* ---------------- M4 读能力 ---------------- */
+
+  /** 这个视频在我的哪些收藏夹里（收藏复核就靠它；空数组 = 没收藏）。 */
+  async favContains(aid: number): Promise<Result<number[]>> {
+    const res = await this.http.json<Array<{ id?: number; fid?: number }>>({
+      url: `${API}/x/v3/fav/resource/ids`,
+      query: { resource_id: aid, resource_type: 2, platform: 'web' },
+      referer: REFERER_HOME,
+      sign: true,
+    });
+    if (!res.ok) return res;
+    const list = Array.isArray(res.data) ? res.data : [];
+    return { ok: true, data: list.map((item) => numOr(item.fid, numOr(item.id, 0))).filter((id) => id > 0) };
+  }
+
+  /** 消息中心「回复我的」（只取最近一页；游标是每条自己的 id）。 */
+  async msgfeedReplies(): Promise<Result<MsgfeedItem[]>> {
+    const res = await this.http.json<{ items?: unknown[] }>({
+      url: `${API}/x/msgfeed/reply`,
+      query: { platform: 'web', build: 0, mobi_app: 'web' },
+      referer: REFERER_HOME,
+      sign: true,
+    });
+    if (!res.ok) return res;
+    return { ok: true, data: mapMsgfeed(res.data?.items, 'reply') };
+  }
+
+  /** 消息中心「@我的」。 */
+  async msgfeedAts(): Promise<Result<MsgfeedItem[]>> {
+    const res = await this.http.json<{ items?: unknown[] }>({
+      url: `${API}/x/msgfeed/at`,
+      query: { platform: 'web', build: 0, mobi_app: 'web' },
+      referer: REFERER_HOME,
+      sign: true,
+    });
+    if (!res.ok) return res;
+    return { ok: true, data: mapMsgfeed(res.data?.items, 'at') };
+  }
+
+  /** 私信会话列表（只取会话不拉消息：没新消息时不产生额外请求）。 */
+  async dmSessions(): Promise<Result<DmSession[]>> {
+    const res = await this.http.json<{ session_list?: unknown[] }>({
+      url: 'https://api.vc.bilibili.com/session_svr/v1/session_svr/get_sessions',
+      query: { session_type: 1, group_id: 0, count: 20, platform: 'web' },
+      referer: REFERER_HOME,
+      sign: false,
+    });
+    if (!res.ok) return res;
+    const list = Array.isArray(res.data?.session_list) ? res.data.session_list : [];
+    return {
+      ok: true,
+      data: list
+        .map((raw) => toSession(raw))
+        .filter((session): session is DmSession => session !== null)
+        .sort((a, b) => b.lastMsgAtMs - a.lastMsgAtMs),
+    };
+  }
+
+  /** 跟某个人的最近消息（只给主人用）。 */
+  async dmMessages(talkerId: number, size = 20): Promise<Result<DmMessage[]>> {
+    const res = await this.http.json<{ messages?: unknown[] }>({
+      url: 'https://api.vc.bilibili.com/svr_sync/v1/svr_sync/fetch_session_msgs',
+      query: { talker_id: talkerId, session_type: 1, size: Math.min(Math.max(size, 1), 50), platform: 'web' },
+      referer: REFERER_HOME,
+      sign: false,
+    });
+    if (!res.ok) return res;
+    const list = Array.isArray(res.data?.messages) ? res.data.messages : [];
+    return {
+      ok: true,
+      data: list
+        .map((raw) => toDmMessage(raw))
+        .filter((message): message is DmMessage => message !== null)
+        .sort((a, b) => a.atMs - b.atMs),
+    };
+  }
+}
+
+/* ---------------- M4 读能力的类型与映射 ---------------- */
+
+export interface MsgfeedItem {
+  /** 消息中心自己的 id（用作游标）。 */
+  id: number;
+  kind: 'reply' | 'at';
+  mid: number;
+  uname: string;
+  content: string;
+  atMs: number;
+  /** 源对象（视频 aid）。 */
+  oid: number;
+  /** 我们被回复/被 @ 的那条评论。 */
+  rootRpid: string;
+  /** 对方那条消息的 rpid/id。 */
+  sourceRpid: string;
+}
+
+export interface DmSession {
+  talkerId: number;
+  uname: string;
+  lastMsgAtMs: number;
+  unread: number;
+}
+
+export interface DmMessage {
+  senderId: number;
+  receiverId: number;
+  text: string;
+  atMs: number;
+  msgKey: string;
+}
+
+function mapMsgfeed(items: unknown[] | undefined, kind: 'reply' | 'at'): MsgfeedItem[] {
+  if (!Array.isArray(items)) return [];
+  const out: MsgfeedItem[] = [];
+  for (const raw of items) {
+    if (!isObj(raw)) continue;
+    const user = isObj(raw.user) ? raw.user : {};
+    const item = isObj(raw.item) ? raw.item : {};
+    const content = str(raw.reply_content) || str(raw.content) || str(item.source_content) || '';
+    const seconds = numOr(raw.at_time, 0) > 0 ? numOr(raw.at_time, 0) : numOr(raw.timestamp, 0);
+    out.push({
+      id: numOr(raw.id, 0),
+      kind,
+      mid: numOr(user.mid, numOr(raw.mid, 0)),
+      uname: str(user.uname) || str(raw.nickname) || '（不知道是谁）',
+      content,
+      atMs: seconds * 1000,
+      oid: numOr(item.source_id, numOr(raw.oid, 0)),
+      rootRpid: str(item.target_id) || str(raw.root_id) || str(raw.target_id),
+      sourceRpid: str(item.source_id) || str(raw.source_id) || str(raw.id),
+    });
+  }
+  return out;
+}
+
+function toSession(raw: unknown): DmSession | null {
+  if (!isObj(raw)) return null;
+  const talkerId = numOr(raw.talker_id, numOr(raw.talker_uid, 0));
+  if (talkerId <= 0) return null;
+  const last = isObj(raw.last_msg) ? raw.last_msg : {};
+  return {
+    talkerId,
+    uname: str(raw.talker_name) || str(last.nickname) || '',
+    lastMsgAtMs: numOr(raw.timestamp, 0) * 1000,
+    unread: numOr(raw.unread_count, 0),
+  };
+}
+
+function toDmMessage(raw: unknown): DmMessage | null {
+  if (!isObj(raw)) return null;
+  const senderId = numOr(raw.sender_uid, 0);
+  if (senderId <= 0) return null;
+  let text = '';
+  const content = raw.content;
+  if (typeof content === 'string') {
+    try {
+      const parsed = JSON.parse(content) as unknown;
+      text = isObj(parsed) ? str(parsed.content) : '';
+    } catch {
+      text = content;
+    }
+  } else if (isObj(content)) {
+    text = str(content.content);
+  }
+  return {
+    senderId,
+    receiverId: numOr(raw.receiver_id, 0),
+    text,
+    atMs: numOr(raw.timestamp, 0) * 1000,
+    msgKey: str(raw.msg_key) || String(numOr(raw.msgid, 0)),
+  };
 }
 
 /* ---------- 工厂：把 http 与 api 接起来（api 同时是 http 的签名器） ---------- */

@@ -24,6 +24,7 @@ import { ControlServer } from '../http/server.ts';
 import { RoundRunner } from './runner.ts';
 import { Scheduler, toDayPlan } from './scheduler.ts';
 import { createHandlers } from './api.ts';
+import { ListenLoop } from './listen.ts';
 import { LoginService } from '../account/login.ts';
 import { summarizePlan, pendingSlots } from '../scheduler/tick.ts';
 import { localIso } from '../shared/time.ts';
@@ -52,6 +53,8 @@ export type DaemonStart =
       stop: () => Promise<void>;
       /** 立刻跑一次 tick（测试与调试用）。 */
       tickNow: () => Promise<void>;
+      /** 立刻跑一次监听（测试与调试用）。 */
+      listenNow: () => Promise<unknown>;
     }
   | { kind: 'already-running'; holder: LockInfo | null; message: string };
 
@@ -96,6 +99,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonStart> {
   });
 
   let stopImpl: (() => void) | null = null;
+  /** 监听循环要晚一步创建（它依赖 ctx）：用晚绑定把 tick 交给面板接口。 */
+  let listenRef: ListenLoop | null = null;
   const handlers = createHandlers({
     ctx,
     runner,
@@ -109,6 +114,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonStart> {
     fixtures: opts.fixtures ?? false,
     mockModel: opts.mockModel ?? false,
     shutdown: () => stopImpl?.(),
+    listenTick: () => (listenRef ? listenRef.tickOnce() : Promise.resolve({ skipped: ['监听循环还没接上'] })),
   });
 
   const server = new ControlServer({
@@ -182,6 +188,11 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonStart> {
     logger.warn('daemon', `配置文件监听没装成（改配置需要重启）：${humanError(err)}`);
   }
 
+  ctx.chat.prune(); // 聊天记录保留 30 天
+  const listen = new ListenLoop({ ctx, ...(opts.now ? { now: opts.now } : {}) });
+  listenRef = listen;
+  if (!opts.fixtures) listen.start();
+
   const tickTimer = setInterval(() => {
     void scheduler.tickOnce();
   }, tickMs);
@@ -193,6 +204,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonStart> {
     if (stopping) return stopping;
     stopping = (async () => {
       logger.info('daemon', `开始退出（${reason}）`);
+      listen.stop();
       clearInterval(tickTimer);
       clearInterval(heartbeatTimer);
       if (watchTimer) clearTimeout(watchTimer);
@@ -242,6 +254,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonStart> {
     token,
     stop: () => shutdown('stop'),
     tickNow: () => scheduler.tickOnce(),
+    listenNow: () => listen.tickOnce(),
   };
 }
 

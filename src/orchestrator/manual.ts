@@ -1,11 +1,11 @@
 /**
- * 手动写操作（M3 只有一种：删自己在某个视频下的评论）。
+ * 手动写操作（面板上人点的那几个）：
+ *   - 删自己在某个视频下的评论（M3）
+ *   - 手动发一条私信（M4：测试消息 / 今天的公开日记 / 今天上下文里的视频信息）
  *
- * 职责：把「面板上的手动删除」收进编排器一侧，保证它和自动写一样受开关与风控约束：
- *   - 总写开关/急停/预演/风控冷却都要检查；
- *   - 只删自己发的（rpid 来自我们自己的账本，不接受任意 rpid）；
- *   - 记事件。
- * 不做什么：不自动删（永远由人点）、不猜 aid（账本里没有就拒绝）。
+ * 职责：保证手动写和自动写受**同一套**开关与风控约束（总写开关 / 急停 / 预演 / 风控冷却），
+ *   并且做防呆：只删自己的（rpid 来自账本）、只发今天出现过的 BV、私信 ≤500。
+ * 不做什么：不自动删/发（永远由人点）、不猜 aid、不调模型。
  */
 
 import type { Logger } from '../shared/logger.ts';
@@ -53,4 +53,47 @@ export async function deleteOwnComment(
     data: { rpid: input.rpid, dryRun: options.dryRun === true },
   });
   return { ok: true, message: options.dryRun === true ? `预演：${outcome.plan.summary}` : '已删除' };
+}
+
+export interface ManualDmDeps extends ManualDeleteDeps {
+  secrets: { selfMid(): number };
+  chat: { append(line: { at: string; from: 'owner' | 'self'; text: string; manual?: boolean }): void };
+  now?: () => Date;
+}
+
+/**
+ * 面板手动发私信：测试消息 / 今天的公开日记 / 今天上下文里的视频信息。
+ * 只发给主人（配置里的 account.mid）；只发今天报告里出现过的 BV；≤500 字。
+ */
+export async function sendManualDm(
+  deps: ManualDmDeps,
+  input: { text?: string; kind?: 'diary' | 'video_info'; bvid?: string; diary?: string; videoText?: string },
+): Promise<{ ok: boolean; message: string }> {
+  const cfg = deps.config;
+  if (!cfg.safety.writeEnabled) return { ok: false, message: '总写开关关着' };
+  if (cfg.safety.killSwitch) return { ok: false, message: '急停开着' };
+
+  const receiver = cfg.account?.mid && cfg.account.mid > 0 ? cfg.account.mid : deps.secrets.selfMid();
+  if (receiver <= 0) return { ok: false, message: '不知道发给谁：先登录（面板「账号」页）' };
+
+  let text = input.text?.trim() ?? '';
+  if (input.kind === 'diary') {
+    if (!input.diary) return { ok: false, message: '今天还没有公开日记' };
+    text = input.diary.slice(0, 480);
+  } else if (input.kind === 'video_info') {
+    if (!input.bvid) return { ok: false, message: '缺少 bvid' };
+    if (!input.videoText) return { ok: false, message: `${input.bvid} 不在今天的上下文里（只发今天出现过的视频）` };
+    text = input.videoText;
+  }
+  if (!text) return { ok: false, message: '内容是空的' };
+
+  const chars = Array.from(text);
+  if (chars.length > cfg.listen.dm.maxChars) text = `${chars.slice(0, cfg.listen.dm.maxChars - 1).join('')}…`;
+
+  const outcome = await deps.writer.sendDm({ receiverId: receiver, text, senderId: deps.secrets.selfMid() }, { dryRun: cfg.safety.dryRun });
+  if (!outcome.ok) return { ok: false, message: outcome.error?.message ?? '发送失败' };
+
+  // 预演不发、也不记聊天（否则记录里会出现一条没真正发出的消息）
+  if (!outcome.dryRun) deps.chat.append({ at: (deps.now?.() ?? new Date()).toISOString(), from: 'self', text, manual: true });
+  return { ok: true, message: outcome.dryRun ? `预演：${outcome.plan.summary}（未发送）` : '已发送' };
 }

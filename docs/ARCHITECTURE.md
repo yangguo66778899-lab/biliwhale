@@ -30,10 +30,19 @@ daemon（src/daemon/）── 单实例 · 调度循环 · 心跳 · 优雅退�
    ├─ diagnostics.ts        脱敏诊断包
    ├─ account/login.ts      扫码登录 / cookie 粘贴 / nav 复核
    ├─ qr/encoder.ts         二维码编码器（自己写，零依赖）
-   ├─ bili/write.ts         写能力（M3：评论/楼中楼/删自己的；csrf + 签名 + 写间隔 + dry-run plan）
+   ├─ bili/write.ts         写能力（评论/楼中楼/删/收藏/点赞/私信/动态；csrf + 签名 + 写间隔 + dry-run plan）
    ├─ orchestrator/share.ts 分享执行器：闸门 → 幂等 → 发送 → 复核 → 记账
    ├─ orchestrator/pending.ts 审批队列：扫描陌生人回复 → 草稿 → 批准/拒绝 → 复核
-   ├─ orchestrator/manual.ts  手动写（删自己的评论）：开关检查 + 只认自己账本里的 rpid
+   ├─ orchestrator/fav.ts    收藏判据与执行（理由/同类/额度/冷却 + 收藏夹复核）
+   ├─ orchestrator/like.ts   点赞与动态（默认关；动态必须二次确认，一轮里不自动发）
+   ├─ orchestrator/dm.ts     私信分享（合并一条）与私聊通知（摘要/日记/视频信息，三子开关）
+   ├─ orchestrator/chat.ts   只认主人的双向聊天：上下文最小化 + 附件白名单 + 频率限制
+   ├─ orchestrator/watch.ts  评论/@ 监听：游标 + 首次建基线 + 陌生人进待审
+   ├─ daemon/listen.ts       监听循环（评论/@ 与私信各自的间隔、抖动、退避）
+   ├─ orchestrator/manual.ts  手动写（删自己的评论、面板发私信）：开关检查 + 只认自己的东西
+   ├─ state/chatStore.ts      chat/owner.jsonl：追加/读最近 N/30 天清理/清空
+   ├─ state/pending.ts        pending/replies.json：待审草稿与 7 天过期
+   ├─ state/replied.ts        replied.json：谁回过我们、回过几次
    └─ config/describe.ts    配置元数据（面板表单由它渲染）
         │
         ▼
@@ -148,14 +157,22 @@ Phase 10 收尾     token 记账 / run 记录 / 事件    → state.noteRun + ad
     冷却期内分享与审批都拒绝。
 25. **陌生人回复一律走审批**：草稿进 `pending/replies.json`；批准才发、拒绝留理由、7 天过期作废；
     审批发送同样受总写开关/急停/风控约束。
-26. **手动写也受同一套开关**：面板删评论走 `manual.ts`，只认自己账本里的 rpid，且需要 aid（对不上就拒绝）。
+26. **手动写也受同一套开关**：面板删评论 / 发私信走 `manual.ts`，只认自己账本里的 rpid 与今天出现过的 BV。
+27. **每个写能力都有自己的执行器**：收藏只能 `fav.ts` 发、点赞只能 `like.ts` 发、私信只能 `dm.ts` / `chat.ts` / `manual.ts` 发、
+    动态只能 `like.ts` 发（且必须 `confirm`）；有不变式测试按文件名扫。
+28. **「关了就是零」**：每个开关关闭后不许有任何请求、任何记账、任何聊天记录；测试里把 API 换成「一调就抛」来证明。
+29. **聊天只认主人**：`senderId !== ownerMid` 直接返回，不发请求、不记账；`ownerMid` = 配置里的 `account.mid`，没有就用登录态。
+30. **聊天不干活**：聊天路径不建 `ToolRuntime`、不写 `ConfigService`、不调 share/fav/like/dm-notify；
+    只允许回一条 + 两个附件（公开日记 / 白名单 BV），并有代码兜底拒绝「帮你改设置/贴 cookie/本机路径」。
+31. **监听不倒历史**：游标为空时只记下当前位置（`baseline`），不创建任何草稿；间隔 ≥60s（评论）/ 20–60s（私信），
+    空闲退避到 15 分钟；重活（读消息、调模型）只在真有新消息时发生。
 
 ## 想加东西时改哪里
 
 | 要加的东西 | 改哪里 |
 |---|---|
 | 新的只读工具 | `agent/tools.ts` 的 `TOOLS`（写清 phases 与「什么时候别用」），再把关键材料加进 `orchestrator/prompts.ts` |
-| 新的写操作（M4） | 先写 `gate.ts` 的闸门与 dry-run，再写 `bili/write.ts` 的函数（记得加进不变式的白名单）；**没有闸门不许合并** |
+| 新的写操作（M5+） | 先写闸门/判据（纯函数）与 dry-run，再写 `bili/write.ts` 的函数（加进不变式白名单），最后给它一个专属执行器；**没有闸门不许合并** |
 | 新的配置项 | `config/spec.ts` 一处即可（默认值、校验、说明、未来的设置页都从这里生长） |
 | 新的产出文件 | `orchestrator/writers.ts`，并保证「多轮追加、不覆盖」 |
 | 新的通知渠道 | `notify/`（M4），失败要回退到 `logs/notify.log` |
@@ -201,5 +218,12 @@ Phase 10 收尾     token 记账 / run 记录 / 事件    → state.noteRun + ad
   不翻页是刻意的：翻页会把「刚发就被折叠」这种正常情况误判成失败，代价是漏判——漏判标 `unverified` 比误判「重发」安全。
 - **写间隔与读间隔分开**：读 1.5s + 抖动，写 5s + 0–1s 抖动（写层自己计时，不复用读队列的节流）。
 - **待审队列不自动清零**：草稿会一直留着直到你处理或 7 天过期；过期只是改状态，不删记录（历史还能看）。
-- **「主人」在单账号下就是自己**：自己回自己的评论在扫描阶段直接跳过；`ownerDirect`（主人直发）要等 M4 的双账号/监听场景，
-  M3 里没有留那段走不到的代码。
+- **「主人」在单账号下就是自己**：自己回自己的评论在扫描阶段直接跳过；`ownerDirect`（主人直发）要等双账号场景才有意义，
+  所以 M4 里没有留那段走不到的代码。私信的收件人也按同一口径：`account.mid`（没有就用登录态 mid）。
+- **私信/动态接口形状未验证**：`api.vc.bilibili.com/web_im/send_msg` 与 `x/dynamic/feed/create/dyn` 是照公开实现写的，
+  `sign` 传 `false`（这两个域名不吃 wbi）。评论/收藏/点赞走 `api.bilibili.com` 且签名。
+  这一条明确写在验收记录的 ⏳ 里——**在真账号上跑通之前，不要相信这条链路**。
+- **聊天上下文故意很小**：人设 + 最近 N 条 + 今天公开日记（截 600 字）+ 报告摘要（截 400 字）+ 今天的 BV 列表。
+  不注入字幕、不注入评论区，既省钱也少给提示注入留口子。
+- **监听是轮询**：评论/@ 用消息中心一次拿一页（≥60s），私信先只拉会话列表（20–60s），
+  只有「最后一条时间 > 游标」时才去拉消息、才调模型——所以「没新消息零 token」是结构保证，不是运气。

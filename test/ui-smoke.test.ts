@@ -99,7 +99,7 @@ interface RenderResult {
   errors: string[];
 }
 
-const ROUTES = ['overview', 'settings', 'account', 'reports', 'diaries', 'pending', 'logs', 'about'] as const;
+const ROUTES = ['overview', 'settings', 'account', 'reports', 'diaries', 'pending', 'dm', 'logs', 'about'] as const;
 
 async function renderPage(route: string): Promise<RenderResult> {
   const script = fs.readFileSync(path.join(process.cwd(), 'src', 'ui', 'app.js'), 'utf8');
@@ -157,6 +157,22 @@ async function renderPage(route: string): Promise<RenderResult> {
     '/api/diaries/public/2026-10-21': { ok: true, date: '2026-10-21', markdown: '# 日记\n\n写点东西。' },
     '/api/diaries/private/2026-10-21': { ok: true, date: '2026-10-21', markdown: '# 私人\n\n心里话。' },
     '/api/models': { ok: true, configured: 'deepseek-flash', actual: 'deepseek-flash', budget: { tokens: 1200, calls: 2 } },
+    '/api/dm': {
+      ok: true,
+      enabled: true,
+      chat: true,
+      receiver: 42,
+      notifyEnabled: false,
+      sendSummary: true,
+      sendDiary: true,
+      sendVideoInfo: true,
+      maxHistory: 10,
+      maxPerHour: 20,
+      sentLastHour: 1,
+      todayCount: 2,
+      last: now,
+    },
+    '/api/dm/chat': { ok: true, total: 2, items: [{ at: now, from: 'owner', text: '在吗' }, { at: now, from: 'self', text: '在' }] },
     '/api/pending': {
       ok: true,
       count: 1,

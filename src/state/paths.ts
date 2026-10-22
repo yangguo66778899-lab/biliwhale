@@ -41,6 +41,8 @@ export interface Paths {
   pendingReplies: string;
   /** 谁回过我们、回过几次（replied.json）。 */
   replied: string;
+  /** 与主人的聊天记录（chat/owner.jsonl）。 */
+  chatOwner: string;
 }
 
 function appData(): string {
@@ -96,6 +98,7 @@ export function resolvePaths(overrides: { dataDir?: string; localDir?: string } 
     fixturesDir: path.join(process.cwd(), 'fixtures'),
     pendingReplies: path.join(dataDir, 'pending', 'replies.json'),
     replied: path.join(dataDir, 'replied.json'),
+    chatOwner: path.join(dataDir, 'chat', 'owner.jsonl'),
   };
 }
 

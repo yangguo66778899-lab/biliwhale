@@ -228,6 +228,31 @@ function wbi(params) {
 - 评论三个读接口 **不需要 WBI**；搜索、字幕列表 **必须 WBI**；`playurl`、`view`、`popular`、`rank`、`dynamic/feed`、`msgfeed` 均未签名。
 - 字幕额外参数：**只有 `bvid` + `cid`**（进 WBI）；兜底端点另需 `oid/pid/context_ext/type/cur_production_type/preferred_language/playlist_switch`；**`graph_version` 在两仓库中均未出现**（那是弹幕分段的参数，此处不涉及）。
 
+## 写接口（M3/M4 新增；文件名是历史包袱，这里已不止只读）
+
+> 这份文件的标题来自 M0 时代（当时只有只读）。M3 起项目有了写能力，写接口就记在这里；每条都标了**我们验到什么程度**。
+
+| 动作 | 方法与端点 | 关键参数 | 签名 | 我们验到哪 |
+|---|---|---|---|---|
+| 发评论 / 楼中楼回复 | `POST https://api.bilibili.com/x/v2/reply/add` | `oid`(=aid)、`type=1`、`message`、`plat=1`、`csrf`；楼中楼另加 `root` + `parent` | 是（wbi） | 假传输层单测；**真账号待验** |
+| 删自己的评论 | `POST https://api.bilibili.com/x/v2/reply/del` | `oid`、`type=1`、`rpid`、`csrf` | 是 | 单测；真账号待验 |
+| 收藏 / 取消 | `POST https://api.bilibili.com/x/v3/fav/resource/deal` | `rid`(=aid)、`type=2`、`add_media_ids` / `del_media_ids`、`csrf` | 是 | 单测；复核走 `x/v3/fav/resource/ids` |
+| 点赞 / 取消 | `POST https://api.bilibili.com/x/web-interface/archive/like` | `aid`、`like=1/0`、`csrf` | 是 | 单测；真账号待验 |
+| 发私信 | `POST https://api.vc.bilibili.com/web_im/v1/web_im/send_msg` | `msg[sender_uid]`、`msg[receiver_id]`、`msg[receiver_type]=1`、`msg[msg_type]=1`、`msg[content]={"content":"…"}`、`msg[dev_id]`、`msg[timestamp]`、`csrf` | **否**（api.vc 不吃 wbi） | 单测；**真账号待验（M4 最可能出问题的一处）** |
+| 发动态 | `POST https://api.bilibili.com/x/dynamic/feed/create/dyn` | `dyn_req`（`{"content":{"contents":[{"raw_text":"…"}]},"scene":1}`）、`csrf` | **否** | 单测；真账号待验；默认关 + 必须二次确认 |
+| 读：收藏夹包含 | `GET https://api.bilibili.com/x/v3/fav/resource/ids` | `resource_id`(=aid)、`resource_type=2` | 是 | 单测（收藏复核） |
+| 读：回复我的 / @我的 | `GET https://api.bilibili.com/x/msgfeed/reply` · `/at` | `platform=web`、`build=0`、`mobi_app=web` | 是 | 夹具缺；监听真机待验 |
+| 读：私信会话列表 | `GET https://api.vc.bilibili.com/session_svr/v1/session_svr/get_sessions` | `session_type=1`、`group_id=0`、`count=20` | 否 | 夹具缺；监听真机待验 |
+| 读：私信消息 | `GET https://api.vc.bilibili.com/svr_sync/v1/svr_sync/fetch_session_msgs` | `talker_id`、`session_type=1`、`size` | 否 | 夹具缺；监听真机待验 |
+
+**共同约束**（代码里强制，不靠自觉）：
+
+- 所有写请求带 `csrf=bili_jct`；缺它直接拒绝并提示重新登录。
+- 写请求**不重试**（`noRetry`）；串行；写间隔 5s + 0–1s 抖动（私信 1s）。
+- 业务错误按 kind 归类：`-101/-111` → auth 停写；`-412/-352/-509/12015/12051` → risk 立刻停手 + 冷却；
+  `12002/12009` → rate；`21007` → 私信超长。
+- 不变式测试守着「写接口只许出现在 `src/bili/write.ts`」以及「投币/关注/直播/建收藏夹的接口不许出现」。
+
 ## 未取到
 - 未取到：`https://raw.githubusercontent.com/Alterssss/dsh-bili-whale/main/tools/lib/http.mjs`（不存在）
 - 未取到：`https://raw.githubusercontent.com/Alterssss/dsh-bili-whale/main/tools/lib/wbi.mjs`（不存在）

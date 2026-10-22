@@ -28,7 +28,7 @@ import { makeReplyDraft } from '../orchestrator/replyDraft.ts';
 import { discoverModel, keyFingerprint } from '../llm/discovery.ts';
 import { SPEC } from '../config/spec.ts';
 import type { ObjectSpec } from '../config/spec.ts';
-import { deleteOwnComment } from '../orchestrator/manual.ts';
+import { deleteOwnComment, sendManualDm } from '../orchestrator/manual.ts';
 import { runDoctor } from '../doctor.ts';
 import type { AutostartService } from '../lifecycle/autostart.ts';
 
@@ -47,6 +47,8 @@ export interface PanelDeps {
   mockModel: boolean;
   /** 退出内核（由 daemon 注入）。 */
   shutdown: () => void;
+  /** 立刻跑一次监听（由 daemon 注入；夹具模式不接）。 */
+  listenTick?: () => Promise<unknown>;
 }
 
 export type AllHandlers = ControlHandlers & PanelHandlers;
@@ -500,10 +502,111 @@ export function createHandlers(deps: PanelDeps): AllHandlers {
         { dryRun },
       );
     },
+
+    /* ---------------- 私聊（M4） ---------------- */
+
+    dm() {
+      const cfg = ctx.config.get();
+      const channel = (cfg.notify.channels ?? []).find((item) => item.type === 'dm');
+      const receiver = cfg.account?.mid && cfg.account.mid > 0 ? cfg.account.mid : ctx.secrets.selfMid();
+      return {
+        enabled: cfg.listen.dm.enabled,
+        chat: cfg.listen.dm.chat,
+        ownerMid: receiver,
+        receiver,
+        notifyEnabled: Boolean(channel?.enabled),
+        sendSummary: Boolean(channel?.sendSummary),
+        sendDiary: Boolean(channel?.sendDiary),
+        sendVideoInfo: Boolean(channel?.sendVideoInfo),
+        maxHistory: cfg.listen.dm.maxHistory,
+        maxPerHour: cfg.listen.dm.maxPerHour,
+        sentLastHour: ctx.chat.sentInLastHour(),
+        todayCount: ctx.chat.today().length,
+        last: ctx.chat.last()?.at ?? null,
+      };
+    },
+
+    dmChat(limit: number) {
+      return { items: ctx.chat.recent(limit), total: ctx.chat.all().length };
+    },
+
+    async dmSend(body: { text?: string; kind?: 'diary' | 'video_info'; bvid?: string }) {
+      let diary: string | undefined;
+      let videoText: string | undefined;
+      if (body.kind === 'diary') {
+        try {
+          diary = fs.readFileSync(path.join(ctx.paths.diariesPublicDir, `${localDate()}.md`), 'utf8');
+        } catch {
+          diary = undefined;
+        }
+        if (!diary) return { ok: false, message: '今天还没有公开日记' };
+      } else if (body.kind === 'video_info') {
+        if (!body.bvid) return { ok: false, message: '缺少 bvid' };
+        videoText = findTodayVideo(ctx, body.bvid)?.text;
+        if (!videoText) return { ok: false, message: `${body.bvid} 不在今天的上下文里（只发今天出现过的视频）` };
+      }
+
+      return sendManualDm(
+        {
+          logger: ctx.logger,
+          config: ctx.config.get(),
+          quota: ctx.quota,
+          state: ctx.state,
+          writer: ctx.writer,
+          secrets: ctx.secrets,
+          chat: ctx.chat,
+        },
+        {
+          ...(body.text !== undefined ? { text: body.text } : {}),
+          ...(body.kind ? { kind: body.kind } : {}),
+          ...(body.bvid ? { bvid: body.bvid } : {}),
+          ...(diary !== undefined ? { diary } : {}),
+          ...(videoText !== undefined ? { videoText } : {}),
+        },
+      );
+    },
+
+    dmClear() {
+      const removed = ctx.chat.clear();
+      return { ok: true, message: `已清空聊天记录（${removed} 条）` };
+    },
+
+    async listenNow() {
+      const runner = deps.listenTick;
+      if (!runner) return { skipped: ['监听循环没接上（夹具模式）'] };
+      return runner();
+    },
   } as AllHandlers;
 }
 
 /* ---------------- 小工具 ---------------- */
+
+/** 从今天的报告里找一条视频（只发今天上下文里出现过的）。 */
+function findTodayVideo(ctx: AppContext, bvid: string): { bvid: string; title: string; text: string } | null {
+  let report = '';
+  try {
+    report = fs.readFileSync(path.join(ctx.paths.reportsDir, `${localDate()}.md`), 'utf8');
+  } catch {
+    return null;
+  }
+  if (!report.includes(bvid)) return null;
+  const lines = report.split('\n');
+  const prefix = `#### ${bvid} · `;
+  const head = lines.find((line) => line.startsWith(prefix));
+  const title = head ? head.replace(prefix, '').trim() : bvid;
+  let understanding = '';
+  for (const line of lines) {
+    const one = /^-\s*一句话[:：]\s*(.+)$/.exec(line);
+    if (one) {
+      understanding = one[1] ?? '';
+      break;
+    }
+  }
+  const text = [title, `https://www.bilibili.com/video/${bvid}`, understanding ? `我觉得：${understanding}` : '']
+    .filter((line) => line.length > 0)
+    .join('\n');
+  return { bvid, title, text };
+}
 
 function sanitizeConfigPatch(
   patch: unknown,

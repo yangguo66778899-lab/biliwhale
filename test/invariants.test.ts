@@ -65,48 +65,72 @@ test('C3：源码与夹具里没有直播 / 弹幕相关字段或能力', () => 
   assert.deepEqual(hits, [], `C3 要求直播与弹幕为零：${JSON.stringify(hits)}`);
 });
 
-test('M3 写能力：只允许 comment/add 与 comment/del，且只许出现在 bili/write.ts', () => {
-  // 允许的写接口（M3 只做评论；收藏/私信/动态/点赞在 M4，先一条都不许出现）
-  const allowed = ['/x/v2/reply/add', '/x/v2/reply/del'];
+test('写能力白名单：只有评论/收藏/点赞/私信/动态，且只许出现在 bili/write.ts', () => {
+  // M4 之后允许的写接口（收藏、点赞、私信、动态）
+  const allowed = [
+    '/x/v2/reply/add',
+    '/x/v2/reply/del',
+    '/x/v3/fav/resource/deal',
+    '/x/web-interface/archive/like',
+    'web_im/send_msg',
+    '/x/dynamic/feed/create/dyn',
+  ];
   const forbidden = [
     '/x/v2/reply/action', // 点赞评论
     '/x/relation/modify', // 关注
-    '/x/v3/fav/resource/deal', // 收藏
-    '/x/dynamic/feed/create', // 动态
-    '/x/web-interface/dynamic/publish',
-    '/msg/send/msg', // 私信
+    '/msg/send/msg', // 旧版私信群发接口（不用它）
     '/x/click-interface/web/heartbeat', // 投币
-    '/x/web-interface/coin/add',
+    '/x/web-interface/coin/add', // 投币
+    '/x/v3/fav/folder/create', // 建收藏夹（不需要）
+    '/xlive/', // 直播：整体不做
   ];
   const escape = (value: string): string => value.replace(/[/.]/g, '\\$&');
 
   const forbiddenHits = grep(SOURCE_FILES, new RegExp(forbidden.map(escape).join('|')));
-  assert.deepEqual(forbiddenHits, [], `M3 不该有这些写接口（M4 再说）：${JSON.stringify(forbiddenHits)}`);
+  assert.deepEqual(forbiddenHits, [], `不该有这些写接口（投币/关注/直播/建收藏夹）：${JSON.stringify(forbiddenHits)}`);
 
   const allowedHits = grep(SOURCE_FILES, new RegExp(allowed.map(escape).join('|')));
-  assert.ok(allowedHits.length > 0, 'M3 应该已经有评论写接口');
+  assert.ok(allowedHits.length > 0, '应该已经有写接口');
   const wrongFile = allowedHits.filter((hit) => !hit.file.endsWith(`bili${path.sep}write.ts`));
   assert.deepEqual(wrongFile, [], `写接口只许出现在 bili/write.ts（闸门与幂等都在编排器里）：${JSON.stringify(wrongFile)}`);
 
-  // 写请求必须是 POST，且必须带 csrf 与签名（否则 B 站会 403 / 被风控）
+  // 写请求必须是 POST，且必须带 csrf（否则 B 站会 403 / 被风控）
   const writerText = fs.readFileSync(path.join(SRC, 'bili', 'write.ts'), 'utf8');
   assert.match(writerText, /method:\s*'POST'/);
   assert.match(writerText, /csrf/);
-  assert.match(writerText, /sign:\s*true/);
+  assert.match(writerText, /sign:\s*[^,\n]*true/, '写请求默认要签名（私信/动态那两个接口除外，单独传 sign:false）');
 
   // 写层必须能被 dry-run：plan 与实际发送分开
   assert.match(writerText, /dryRun/);
 });
 
-test('M3 写调用必须经过闸门：发评论只许在分享/审批，删评论只许在手动', () => {
-  const hits = grep(SOURCE_FILES, /\.postComment\(|\.deleteComment\(/);
-  const allowedFiles = ['share.ts', 'pending.ts', 'manual.ts'];
-  const wrong = hits.filter((hit) => !allowedFiles.includes(path.basename(hit.file)));
-  assert.deepEqual(wrong, [], `只有分享/审批/手动执行器能真的写：${JSON.stringify(wrong)}`);
-
+test('写调用分散到各自的执行器：评论/收藏/点赞/私信/动态各归各家', () => {
   const commentWrites = grep(SOURCE_FILES, /\.postComment\(/);
   const wrongComment = commentWrites.filter((hit) => !['share.ts', 'pending.ts'].includes(path.basename(hit.file)));
   assert.deepEqual(wrongComment, [], `发评论只许在分享与审批里：${JSON.stringify(wrongComment)}`);
+
+  const deleteWrites = grep(SOURCE_FILES, /\.deleteComment\(/);
+  assert.deepEqual(
+    deleteWrites.filter((hit) => path.basename(hit.file) !== 'manual.ts'),
+    [],
+    '删评论只许在手动执行器里',
+  );
+
+  const favWrites = grep(SOURCE_FILES, /\.favVideo\(/);
+  assert.deepEqual(favWrites.filter((hit) => path.basename(hit.file) !== 'fav.ts'), [], '收藏只许在 fav.ts');
+
+  const likeWrites = grep(SOURCE_FILES, /\.likeVideo\(/);
+  assert.deepEqual(likeWrites.filter((hit) => path.basename(hit.file) !== 'like.ts'), [], '点赞只许在 like.ts');
+
+  const dmWrites = grep(SOURCE_FILES, /\.sendDm\(/);
+  assert.deepEqual(
+    dmWrites.filter((hit) => !['dm.ts', 'chat.ts', 'manual.ts'].includes(path.basename(hit.file))),
+    [],
+    '发私信只许在 dm.ts（发送/通知）、chat.ts（聊天回复）、manual.ts（面板手动）',
+  );
+
+  const dynamicWrites = grep(SOURCE_FILES, /\.postDynamic\(/);
+  assert.deepEqual(dynamicWrites.filter((hit) => path.basename(hit.file) !== 'like.ts'), [], '发动态只许在 like.ts（手动 + 二次确认）');
 
   // 分享执行器里必须同时出现闸门与幂等（防止有人绕过）
   const shareText = fs.readFileSync(path.join(SRC, 'orchestrator', 'share.ts'), 'utf8');
