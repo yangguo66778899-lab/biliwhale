@@ -80,7 +80,7 @@ if (Test-Path $appTarget) { Remove-Item -Recurse -Force $appTarget }
 Write-Step "复制程序文件…"
 Copy-Item -Recurse -Force (Join-Path $source "app") $appTarget
 Copy-Item -Recurse -Force (Join-Path $source "runtime") (Join-Path $Target "runtime")
-foreach ($file in @("BiliWhale.cmd", "README.txt", "VERSION", "install.ps1", "uninstall.ps1", "install.cmd", "uninstall.cmd")) {
+foreach ($file in @("BiliWhale.cmd", "launch.ps1", "README.txt", "VERSION", "install.ps1", "uninstall.ps1", "install.cmd", "uninstall.cmd")) {
   $from = Join-Path $source $file
   if (Test-Path $from) { Copy-Item -Force $from $Target }
 }

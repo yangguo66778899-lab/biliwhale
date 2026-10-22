@@ -78,47 +78,93 @@ namespace BiliWhaleTray
         [STAThread]
         private static void Main(string[] args)
         {
-            ParseArgs(args);
-            runtime = RuntimeLoader.Load(dataDirArg);
-
-            // --selftest 不抢单实例：托盘正在跑的时候也要能自检
-            if (selfTest)
+            // 先挂上兜底：winexe 一旦抛异常会静默消失，用户只会看到「双击了没反应」。
+            AppDomain.CurrentDomain.UnhandledException += delegate (object sender, UnhandledExceptionEventArgs e)
             {
+                Log("未处理异常：" + e.ExceptionObject);
+            };
+            Application.ThreadException += delegate (object sender, System.Threading.ThreadExceptionEventArgs e)
+            {
+                Log("界面线程异常：" + e.Exception);
+            };
+            Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+
+            try
+            {
+                Log("启动：参数=[" + string.Join(" ", args) + "] 目录=" + AppDomain.CurrentDomain.BaseDirectory);
+                ParseArgs(args);
+                runtime = RuntimeLoader.Load(dataDirArg);
+
+                // --selftest 不抢单实例：托盘正在跑的时候也要能自检
+                if (selfTest)
+                {
+                    BuildTray();
+                    RefreshHealth();
+                    PrintSelfTest();
+                    return;
+                }
+
+                // 第二次双击：让已经在跑的那个托盘去开面板，自己直接退出。
+                // （没有这一步就是两个托盘图标 + 两个窗口，用户会以为程序起了两份）
+                if (!TakeSingleInstance())
+                {
+                    Log("单实例：已有实例持锁");
+                    if (SignalExistingTray())
+                    {
+                        Log("已请已有实例开面板，本进程退出");
+                        return;
+                    }
+                    // 信号发不出去（很旧的托盘 / 权限）：不要静默退出——继续当自己在跑，
+                    // 否则用户看到的就是「双击了没反应」。
+                    Log("信号发不出去：继续自己起托盘");
+                }
+                else
+                {
+                    Log("单实例：我是第一个");
+                }
+
                 BuildTray();
-                RefreshHealth();
-                PrintSelfTest();
-                return;
-            }
+                Log("托盘图标已创建（visible=" + icon.Visible + "）");
 
-            // 第二次双击：让已经在跑的那个托盘去开面板，自己直接退出。
-            // （没有这一步就是两个托盘图标 + 两个窗口，用户会以为程序起了两份）
-            if (!TakeSingleInstance())
+                if (autostartMode || noOpen)
+                {
+                    // 开机自启 / 调试：只出托盘，不弹窗、不抢焦点
+                    RefreshHealth();
+                    if (autostartMode && !KernelUp()) AutoStartKernel();
+                }
+                else
+                {
+                    // 双击图标：内核没起就先起，起来了就把面板开出来（§6.1：3 秒内出窗口）
+                    EnsureKernelThenOpenPanel();
+                }
+
+                pollTimer = new System.Windows.Forms.Timer();
+                pollTimer.Interval = PollMs;
+                pollTimer.Tick += delegate { RefreshHealth(); };
+                pollTimer.Start();
+                StartOpenPanelWatcher();
+
+                Log("进入消息循环");
+                Application.Run();
+                Log("消息循环结束");
+            }
+            catch (Exception ex)
             {
-                SignalExistingTray();
-                return;
+                Log("启动失败：" + ex);
+                try
+                {
+                    MessageBox.Show(
+                        "托盘起不来：" + ex.Message + "\r\n\r\n日志：" + LogPath(),
+                        AppName,
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Error
+                    );
+                }
+                catch (Exception)
+                {
+                    // 连弹窗都失败就算了，日志里已经有
+                }
             }
-
-            BuildTray();
-
-            if (autostartMode || noOpen)
-            {
-                // 开机自启 / 调试：只出托盘，不弹窗、不抢焦点
-                RefreshHealth();
-                if (autostartMode && !KernelUp()) AutoStartKernel();
-            }
-            else
-            {
-                // 双击图标：内核没起就先起，起来了就把面板开出来（§6.1：3 秒内出窗口）
-                EnsureKernelThenOpenPanel();
-            }
-
-            pollTimer = new System.Windows.Forms.Timer();
-            pollTimer.Interval = PollMs;
-            pollTimer.Tick += delegate { RefreshHealth(); };
-            pollTimer.Start();
-            StartOpenPanelWatcher();
-
-            Application.Run();
         }
 
         /**
@@ -128,6 +174,7 @@ namespace BiliWhaleTray
         private static void EnsureKernelThenOpenPanel()
         {
             RefreshHealth();
+            Log("启动时内核状态：reachable=" + (health != null && health.Reachable) + " runtime=" + (runtime == null ? "无" : runtime.Url));
             if (health != null && health.Reachable)
             {
                 OpenPanelSmart();
@@ -139,7 +186,27 @@ namespace BiliWhaleTray
             {
                 System.Threading.Thread.Sleep(500);
                 RefreshHealth();
-                if (health != null && health.Reachable) break;
+                if (health != null && health.Reachable)
+                {
+                    Log("内核已就绪（第 " + (i + 1) + " 次探测）");
+                    break;
+                }
+            }
+            if (health == null || !health.Reachable)
+            {
+                Log("等内核超时（8 秒）：先开面板，用户可以去菜单点「启动内核」");
+                // 内核起不来时**必须让人看见**：以前是静默等，用户只会觉得「双击没反应」
+                MessageBox.Show(
+                    "内核没能起来，所以面板打不开。\r\n\r\n"
+                        + "可以这样查：\r\n"
+                        + "1. 日志：" + LogPath() + "\r\n"
+                        + "2. 托盘右键 →「启动内核」再试一次\r\n"
+                        + "3. 命令行里跑一次看看报什么错：\r\n"
+                        + "   " + (Environment.GetEnvironmentVariable("BILIWHALE_KERNEL_CMD") ?? "（没有 BILIWHALE_KERNEL_CMD，托盘会用包里的 node）"),
+                    AppName,
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning
+                );
             }
             OpenPanelSmart();
         }
@@ -363,18 +430,25 @@ namespace BiliWhaleTray
             if (health == null || !health.Reachable) RefreshHealth();
             if (runtime == null || string.IsNullOrEmpty(runtime.Url))
             {
+                Log("开面板：拿不到 runtime.url（内核没起来）");
                 ShowBalloon("内核还没起来", "右键 → 启动内核；起不来就看看日志");
                 return;
             }
 
-            if (ActivateExistingPanel()) return;
+            if (ActivateExistingPanel())
+            {
+                Log("开面板：已有窗口，已带到前面");
+                return;
+            }
 
             string edge = FindEdge();
             if (!string.IsNullOrEmpty(edge))
             {
+                Log("开面板：用 Edge app 模式 → " + edge);
                 TryStart(edge, "--app=\"" + runtime.Url + "\" --window-size=1200,820");
                 return;
             }
+            Log("开面板：没找到 Edge，退回默认浏览器");
             TryStart(runtime.Url);
         }
 
@@ -418,12 +492,12 @@ namespace BiliWhaleTray
             }
         }
 
-        private static void SignalExistingTray()
+        /** 通知已在跑的托盘「把面板带到前面」。返回是否真的发出去了。 */
+        private static bool SignalExistingTray()
         {
-            if (TrySignal(TraySignalName) || TrySignal(TraySignalNameLocal)) return;
-            // 信号发不出去（很旧的托盘 / 权限）：自己开一次面板，但绝不再起第二个托盘
-            runtime = RuntimeLoader.Load(dataDirArg);
-            OpenPanelSmart();
+            if (TrySignal(TraySignalName) || TrySignal(TraySignalNameLocal)) return true;
+            // 发不出去：调用方会继续当自己在跑（绝不静默退出）
+            return false;
         }
 
         private static bool TrySignal(string name)
@@ -596,19 +670,25 @@ namespace BiliWhaleTray
             string command = Environment.GetEnvironmentVariable("BILIWHALE_KERNEL_CMD");
             if (string.IsNullOrEmpty(command))
             {
-                string root = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ".."));
-                string cli = Path.Combine(root, "src", "cli.ts");
+                // 没设环境变量时的兜底：包里的 node.exe → 没找到再用 PATH 里的 node。
+                // （以前只用 "node"，包里没装 Node 的机器会直接失败）
+                string appRoot = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ".."));
+                string cli = Path.Combine(appRoot, "src", "cli.ts");
                 if (!File.Exists(cli))
                 {
+                    Log("找不到内核入口：" + cli + "（托盘目录=" + AppDomain.CurrentDomain.BaseDirectory + "）");
                     MessageBox.Show("找不到内核入口：" + cli + "\r\n可以设环境变量 BILIWHALE_KERNEL_CMD 指定启动命令。", AppName);
                     return;
                 }
-                command = "\"node\" \"" + cli + "\" serve";
+                string packageNode = Path.GetFullPath(Path.Combine(appRoot, "..", "runtime", "node.exe"));
+                string nodeExe = File.Exists(packageNode) ? "\"" + packageNode + "\"" : "node";
+                command = nodeExe + " \"" + cli + "\" serve";
                 if (!string.IsNullOrEmpty(dataDirArg)) command = command + " --data-dir \"" + dataDirArg + "\"";
             }
 
             try
             {
+                Log("启动内核：" + command);
                 ProcessStartInfo info = new ProcessStartInfo("cmd.exe", "/c start \"\" " + command);
                 info.UseShellExecute = false;
                 info.CreateNoWindow = true;
@@ -618,7 +698,8 @@ namespace BiliWhaleTray
             }
             catch (Exception ex)
             {
-                MessageBox.Show("启动内核失败：" + ex.Message, AppName);
+                Log("启动内核失败：" + ex);
+                MessageBox.Show("启动内核失败：" + ex.Message + "\r\n\r\n日志：" + LogPath(), AppName);
             }
         }
 
@@ -636,6 +717,47 @@ namespace BiliWhaleTray
                 icon.Dispose();
             }
             Application.Exit();
+        }
+
+        /* ---------------- 日志（GUI 程序静默退出时唯一的线索） ---------------- */
+
+        private static string LogPath()
+        {
+            try
+            {
+                string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+                string dir = Path.Combine(local, AppName, "logs");
+                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+                return Path.Combine(dir, "tray.log");
+            }
+            catch (Exception)
+            {
+                return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "tray.log");
+            }
+        }
+
+        private static void Log(string message)
+        {
+            string line = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + " " + message + "\r\n";
+            if (TryAppend(LogPath(), line)) return;
+            // 写不了标准位置（权限/沙箱）就写在 exe 旁边：总得留一条线索
+            TryAppend(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "tray.log"), line);
+        }
+
+        private static bool TryAppend(string file, string line)
+        {
+            try
+            {
+                File.AppendAllText(file, line, Encoding.UTF8);
+                FileInfo info = new FileInfo(file);
+                // 日志超过 512KB 就清一次，别无限涨
+                if (info.Exists && info.Length > 512 * 1024) File.WriteAllText(file, "", Encoding.UTF8);
+                return true;
+            }
+            catch (Exception)
+            {
+                return false;
+            }
         }
 
         /* ---------------- HTTP ---------------- */
@@ -745,6 +867,7 @@ namespace BiliWhaleTray
             }
             catch (Exception ex)
             {
+                Log("启动失败：" + target + " " + (arguments == null ? "" : arguments) + " → " + ex.Message);
                 MessageBox.Show("打不开：" + ex.Message, AppName);
             }
         }

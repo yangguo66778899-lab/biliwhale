@@ -43,7 +43,9 @@ const DOC_FILE = 'independent-docs'; // 占位，避免误加
 
 /** 包根目录的模板文件（来自 packaging/）。 */
 const ROOT_TEMPLATES = [
+  // .cmd 只做 ASCII 转发，逻辑与中文都在 launch.ps1（UTF-8 BOM）里
   'BiliWhale.cmd',
+  'launch.ps1',
   'install.cmd',
   'install.ps1',
   'uninstall.cmd',

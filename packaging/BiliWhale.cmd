@@ -1,22 +1,13 @@
-﻿@echo off
-rem BiliWhale 便携版启动器：本目录就是程序，数据在 %APPDATA%\BiliWhale
+@echo off
+rem BiliWhale portable launcher.
+rem This file must stay pure ASCII: cmd.exe parses .cmd files in the system ANSI
+rem code page, and UTF-8 Chinese here splits commands (real incident: double-click
+rem flashed and exited because "start" was cut into "rt"). All logic and all
+rem Chinese text live in launch.ps1, which is UTF-8 with BOM.
 setlocal
-set "HERE=%~dp0"
-if not exist "%HERE%runtime\node.exe" (
-  echo 找不到 runtime\node.exe，这个便携包不完整。
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0launch.ps1" %*
+if errorlevel 1 (
+  echo.
+  echo Launch failed. Right-click launch.ps1 - Run with PowerShell to see the error.
   pause
-  exit /b 1
 )
-if not exist "%HERE%app\src\cli.ts" (
-  echo 找不到 app\src\cli.ts，这个便携包不完整。
-  pause
-  exit /b 1
-)
-rem 路径可能有空格（C:\Users\John Smith\…），命令里两个路径都要加引号（审计 §3.41）
-set "BILIWHALE_KERNEL_CMD="%HERE%runtime\node.exe" "%HERE%app\src\cli.ts" serve"
-if exist "%HERE%app\shell\BiliWhaleTray.exe" (
-  start "" "%HERE%app\shell\BiliWhaleTray.exe" %*
-  exit /b 0
-)
-echo 没有托盘程序，直接在当前窗口起内核（关掉窗口就停）。
-"%HERE%runtime\node.exe" "%HERE%app\src\cli.ts" serve

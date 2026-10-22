@@ -21,6 +21,7 @@ test('打包清单：包含程序本体、托盘、文档，不含 test/node_mod
   assert.ok(plan.rootFiles.some((entry) => entry.to === 'install.cmd'));
   assert.ok(plan.rootFiles.some((entry) => entry.to === 'uninstall.ps1'));
   assert.ok(plan.rootFiles.some((entry) => entry.to === 'BiliWhale.cmd'));
+  assert.ok(plan.rootFiles.some((entry) => entry.to === 'launch.ps1'), '启动器的逻辑在 launch.ps1，必须打进包');
   assert.deepEqual(plan.runtimeFiles, [{ from: 'node.exe', to: 'runtime/node.exe' }]);
 });
 
@@ -63,15 +64,23 @@ test('卸载脚本：默认保留数据，删自启与快捷方式，-RemoveData
   assert.match(uninstall, /默认保留|数据保留/, '默认保留数据');
 });
 
-test('便携启动器：用包内 node，不经 PATH；找不到就报错而不是静默', () => {
+test('便携启动器：.cmd 只做 ASCII 转发，逻辑在 launch.ps1（用包内 node、路径带引号）', () => {
+  // 为什么分成两个文件：cmd.exe 按系统 ANSI 代码页解析 .cmd，UTF-8 中文会把命令拆断
+  // （真实事故：双击只闪一下，`start` 被解析成 `rt`）。所以 .cmd 保持纯 ASCII，
+  // 中文和逻辑都放进 UTF-8 BOM 的 launch.ps1。
   const launcher = read('packaging/BiliWhale.cmd');
-  assert.match(launcher, /runtime\\node\.exe/);
-  assert.match(launcher, /BILIWHALE_KERNEL_CMD/);
-  assert.match(launcher, /app\\src\\cli\.ts/);
-  assert.match(launcher, /exit \/b 1/, '缺文件要报错退出');
-  // §6.2：双击目标是启动器 → ① 设内核命令（两个路径都要带引号）② 启动托盘
-  assert.match(launcher, /set "BILIWHALE_KERNEL_CMD="%HERE%runtime\\node\.exe" "%HERE%app\\src\\cli\.ts" serve"/);
-  assert.match(launcher, /start "" "%HERE%app\\shell\\BiliWhaleTray\.exe"/, '要启动托盘（双击即用的入口）');
+  assert.equal(/[^\x00-\x7F]/.test(launcher), false, 'BiliWhale.cmd 必须是纯 ASCII');
+  assert.match(launcher, /powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0launch\.ps1" %\*/, '要转发给 launch.ps1');
+  assert.match(launcher, /pause/, '出错时要停住，不能一闪就没');
+
+  const ps1 = read('packaging/launch.ps1');
+  assert.match(ps1, /runtime\\node\.exe/, '要用包里的 node，不经 PATH');
+  assert.match(ps1, /app\\src\\cli\.ts/);
+  // §6.2：① 设内核命令（两个路径都要带引号）② 启动托盘
+  assert.match(ps1, /BILIWHALE_KERNEL_CMD = '"\{0\}" "\{1\}" serve' -f \$node, \$cli/, '内核命令要带引号（路径含空格/中文也不会坏）');
+  assert.match(ps1, /Start-Process -FilePath \$tray/, '要启动托盘（双击即用的入口）');
+  assert.match(ps1, /Read-Host "按回车关闭"/, '包不完整时要停下来让人看见');
+  assert.match(ps1, /\$args\.Count -gt 0/, '参数为空时不能传 -ArgumentList（Start-Process 会报错）');
 });
 
 test('P2 双击即用：托盘负责起内核 + 用 Edge app 模式开面板 + 单实例（§6.2）', () => {

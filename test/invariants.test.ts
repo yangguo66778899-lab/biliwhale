@@ -209,17 +209,40 @@ test('必需的文件都在（运行说明、许可证、归属、架构、接�
 });
 
 test('编码约定：.ps1 必须有 BOM（PowerShell 5.1 靠它认 UTF-8），.json 必须没有 BOM', () => {
-  // dist/ 是打包产物（打包时会原样复制 BOM），不属于源码约定
-  const ps1 = walk(ROOT, ['.ps1']).filter((file) => !file.includes('node_modules') && !file.startsWith('dist'));
+  // dist/ 是打包产物、test/.tmp 是演练产物，都不属于源码约定
+  const relOf = (file: string): string => path.relative(ROOT, file).split(path.sep).join('/');
+  const generated = (file: string): boolean => {
+    const rel = relOf(file);
+    return rel.startsWith('dist/') || rel.startsWith('node_modules/') || rel.startsWith('test/.tmp/') || rel.startsWith('.npm-cache/');
+  };
+  const ps1 = walk(ROOT, ['.ps1']).filter((file) => !generated(file));
   for (const file of ps1) {
     const head = fs.readFileSync(file).subarray(0, 3);
     assert.deepEqual([...head], [0xef, 0xbb, 0xbf], `${path.relative(ROOT, file)} 缺 UTF-8 BOM，PowerShell 5.1 会把中文读成乱码`);
   }
 
-  const json = walk(ROOT, ['.json']).filter((file) => !file.includes('node_modules') && !file.includes('.npm-cache') && !file.startsWith('dist'));
+  const json = walk(ROOT, ['.json']).filter((file) => !generated(file));
   for (const file of json) {
     const head = fs.readFileSync(file).subarray(0, 3);
     assert.notDeepEqual([...head], [0xef, 0xbb, 0xbf], `${path.relative(ROOT, file)} 带 BOM，JSON.parse 会失败`);
+  }
+});
+
+test('.cmd 必须纯 ASCII：cmd.exe 按系统 ANSI 代码页解析，UTF-8 中文会把命令拆断', () => {
+  // 真实事故（2026-10-22）：packaging/BiliWhale.cmd 用 UTF-8 存了中文注释/提示，
+  // 双击时 cmd.exe 把 `start` 解析成 `rt`，窗口闪一下就没了，托盘也没起来。
+  // 修法：.cmd 只做 ASCII 转发，中文与逻辑放进 .ps1（UTF-8 BOM）。
+  const relOf = (file: string): string => path.relative(ROOT, file).split(path.sep).join('/');
+  const cmdFiles = walk(ROOT, ['.cmd']).filter((file) => {
+    const rel = relOf(file);
+    return !rel.startsWith('dist/') && !rel.startsWith('node_modules/') && !rel.startsWith('test/.tmp/');
+  });
+  assert.ok(cmdFiles.length >= 3, `应该有至少 3 个 .cmd（启动/安装/卸载），实际 ${cmdFiles.length}`);
+  for (const file of cmdFiles) {
+    const bytes = fs.readFileSync(file);
+    const nonAscii = [...bytes].filter((byte) => byte > 127).length;
+    assert.equal(nonAscii, 0, `${relOf(file)} 里有 ${nonAscii} 个非 ASCII 字节：cmd.exe 会按 ANSI 解析它，中文会把命令拆断（见 P2 事故）`);
+    assert.notDeepEqual([...bytes.subarray(0, 3)], [0xef, 0xbb, 0xbf], `${relOf(file)} 带 BOM：cmd.exe 会把 BOM 当成命令的一部分`);
   }
 });
 
