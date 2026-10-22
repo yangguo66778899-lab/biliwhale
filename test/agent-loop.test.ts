@@ -7,6 +7,7 @@ import { runAgentLoop, stableArgs } from '../src/agent/loop.ts';
 import type { LoopInput } from '../src/agent/loop.ts';
 import type { ToolRuntime } from '../src/agent/tools.ts';
 import type { ChatMessage, ChatResult, ChatRequest, LlmClient, ToolCall } from '../src/llm/client.ts';
+import { userContent } from '../src/llm/client.ts';
 import { tmpDir } from './helpers.ts';
 
 function quietLogger(dir: string): Logger {
@@ -249,4 +250,47 @@ test('越权工具调用会被拒绝（模型说要调不存在的工具）', as
 
 test('stableArgs 让参数顺序不影响去重', () => {
   assert.equal(stableArgs('{"b":1,"a":2}'), stableArgs('{"a":2,"b":1}'));
+});
+
+test('看画面：图片只进 user 消息，system / assistant / tool 仍是纯文本', async () => {
+  const { client, requests } = scriptedClient([
+    { content: '', toolCalls: [toolCall('subtitles_full', { bvid: 'BV1a0000001' }, 'c1')] },
+    { content: '收尾' },
+  ]);
+  const { runtime } = fakeRuntime();
+  const dataUrl = 'data:image/jpeg;base64,QUJD';
+
+  const out = await runAgentLoop(baseInput({ client, runtime, userImages: [dataUrl] }));
+  assert.equal(out.ok, true);
+
+  const first = requests[0]?.messages ?? [];
+  const system = first.find((m) => m.role === 'system');
+  assert.equal(typeof system?.content, 'string', 'system 只能是字符串');
+
+  const user = first.find((m) => m.role === 'user');
+  assert.ok(user && Array.isArray(user.content), 'user 消息要变成内容块数组');
+  const parts = user.content as Array<{ type: string; text?: string; image_url?: { url: string } }>;
+  assert.equal(parts[0]?.type, 'text', '第一块是文字');
+  assert.match(parts[0]?.text ?? '', /本轮任务/, '原来的 user 文本不能丢');
+  assert.equal(parts[1]?.type, 'image_url');
+  assert.equal(parts[1]?.image_url?.url, dataUrl, 'image_url.url 必须是 data:image/jpeg;base64,…');
+
+  // 第二跳（带工具结果）里，assistant 与 tool 都是纯文本，图片不再重复
+  const second = requests[1]?.messages ?? [];
+  for (const message of second) {
+    if (message.role === 'system' || message.role === 'tool') {
+      assert.equal(typeof message.content, 'string', `${message.role} 消息不许带图片内容块`);
+    }
+    if (message.role === 'assistant') {
+      assert.ok(message.content === null || typeof message.content === 'string', 'assistant 消息不许带图片内容块');
+    }
+  }
+});
+
+test('看画面：非 data URL 的图片会被丢掉（不把本地路径/外链发给模型）', () => {
+  assert.equal(userContent('hi'), 'hi', '没有图就还是纯字符串');
+  assert.equal(userContent('hi', ['C:/tmp/a.jpg']), 'hi', '本地路径不是图片块');
+  assert.equal(userContent('hi', ['https://example.com/a.jpg']), 'hi', '外链也不发');
+  const withImage = userContent('hi', ['data:image/jpeg;base64,AA']);
+  assert.ok(Array.isArray(withImage));
 });

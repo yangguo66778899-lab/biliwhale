@@ -208,6 +208,16 @@ export interface RunRecord {
   counts: RunCounts;
   errors: string[];
   notes: string[];
+  /** 看画面（§7.10）的结果：只记状态与缓存里的文件名，**不存图片本身**。 */
+  media?: {
+    status: 'off' | 'ok' | 'skipped' | 'failed';
+    bvid?: string;
+    reason?: string;
+    frames?: number;
+    sheet?: string;
+    strip?: string;
+    bytes?: number;
+  };
 }
 
 /** 额度/操作账本的一行（同时是写操作的幂等账本：note 存幂等键）。 */

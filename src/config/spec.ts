@@ -302,6 +302,42 @@ export const SPEC = {
       },
     },
 
+    media: {
+      kind: 'object',
+      label: '看画面',
+      desc: '开一轮时顺便抽几帧让模型看画面；默认关（费流量，还要装 ffmpeg）',
+      fields: {
+        frames: {
+          kind: 'boolean',
+          label: '看画面（抽帧）',
+          desc: '开 = 每轮下载一条低清视频，抽几帧拼成一张图给模型；关 = 只读标题/简介/字幕/评论',
+          default: false,
+        },
+        ffmpegPath: {
+          kind: 'string',
+          label: 'ffmpeg 位置',
+          desc: '留空 = 用系统 PATH 里的 ffmpeg；装了但没在 PATH 就填完整路径',
+          default: '',
+          maxLen: 260,
+        },
+        frameCount: {
+          kind: 'number',
+          label: '抽几帧',
+          desc: '默认 9（拼成 3×3 九宫格）；多了更费 token',
+          default: 9,
+          min: 4,
+          max: 12,
+          int: true,
+        },
+        subtitleStrip: {
+          kind: 'boolean',
+          label: '没字幕时读画面里的字幕',
+          desc: '裁画面下方约三分之一、每 7 秒一帧竖拼；只在视频本身没有字幕轨时做',
+          default: true,
+        },
+      },
+    },
+
     score: {
       kind: 'object',
       label: '判分',

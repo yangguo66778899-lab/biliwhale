@@ -38,6 +38,13 @@ export interface SearchOptions {
   order?: 'totalrank' | 'click' | 'pubdate';
 }
 
+/** 播放地址（低清 mp4；看画面用，取到就别到处传）。 */
+export interface PlayUrlInfo {
+  url: string;
+  /** B 站返回的清晰度码（16 = 360P）。 */
+  quality: number;
+}
+
 const MIXIN_TTL_MS = 6 * 60 * 60 * 1000;
 
 export class BiliApi implements WbiProvider {
@@ -237,6 +244,30 @@ export class BiliApi implements WbiProvider {
     const cues = await this.subtitleCues(track.url, bvid);
     if (!cues.ok) return cues;
     return { ok: true, data: { cues: cues.data, track } };
+  }
+
+  /**
+   * 播放地址：`fnval=1` 要传统的 durl（一路 mp4/flv），`qn=16` 是 360P——抽帧够用、也省流量。
+   * 必须签名 + 带 cookie（匿名通常拿不到）。
+   */
+  async playUrl(bvid: string, cid: number, qn = 16): Promise<Result<PlayUrlInfo>> {
+    if (!cid) return { ok: false, error: { kind: 'parse', code: 'parse', message: '没有 cid，取不到播放地址' } };
+    const res = await this.http.json<PlayUrlRaw>({
+      url: `${API}/x/player/wbi/playurl`,
+      query: { bvid, cid, qn, fnval: 1, fnver: 0, fourk: 0 },
+      referer: `${REFERER_VIDEO}${bvid}/`,
+      sign: true,
+    });
+    if (!res.ok) return res;
+    const durl = Array.isArray(res.data?.durl) ? res.data.durl : [];
+    const first = durl.find((item) => str(item?.url).length > 0);
+    if (!first) {
+      return {
+        ok: false,
+        error: { kind: 'business', code: 'no_playurl', message: '接口没给播放地址（可能没登录，或这条视频没有版权/已下架）' },
+      };
+    }
+    return { ok: true, data: { url: str(first.url), quality: numOr(res.data?.quality, qn) } };
   }
 
   /* ---------- 评论 ---------- */
@@ -623,6 +654,12 @@ interface ViewRaw {
 
 interface PlayerRaw {
   subtitle?: { subtitles?: Array<{ lan?: unknown; lan_doc?: unknown; subtitle_url?: unknown }>; ai_status?: unknown };
+}
+
+interface PlayUrlRaw {
+  quality?: unknown;
+  /** fnval=1 时的传统地址列表（每项就是一个 mp4/flv）。 */
+  durl?: Array<{ url?: unknown; size?: unknown }>;
 }
 
 interface ReplyRaw {

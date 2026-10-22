@@ -53,6 +53,8 @@ import { buildDeepPrompt, buildScreenPrompt, clip, pickDeepReads } from './promp
 import { appendNotifyLog, writeArchive, writeDiary, writeReport, videoUrl, skipReasonText } from './writers.ts';
 import { dispatchNotifications } from '../notify/index.ts';
 import { buildWhyNot } from './whynot.ts';
+import { prepareVisuals } from '../media/frames.ts';
+import type { VisualOverrides, VisualResult } from '../media/frames.ts';
 import { buildSystemMessage, buildUserPreamble, loadPromptAssets } from '../agent/prompts.ts';
 import type { PromptStatus } from '../agent/prompts.ts';
 import { extractJson as extractJsonFromModule, fallbackRoundResult, validateRoundResult, validateScreenResult } from '../agent/output.ts';
@@ -89,6 +91,8 @@ export interface RoundDeps {
   noCredentialsNeeded?: boolean;
   /** 预检里追加一句模式说明（夹具 / 模拟模型 / 真实）。 */
   modeNote?: string;
+  /** 测试注入：看画面的下载 / ffmpeg / 本地样片（不传就走真实实现）。 */
+  media?: VisualOverrides;
   now?: () => Date;
 }
 
@@ -128,6 +132,8 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
   const counts: RunCounts = { candidates: 0, screened: 0, deepRead: 0, selected: 0, shared: 0, skippedNoSubtitle: 0 };
   /** 真正发生的模型调用次数（一次 loop step = 一次 chat 调用），修复重试也算。 */
   let llmCalls = 0;
+  /** 看画面的结果（§7.10）：写进 run 记录，只记状态与文件名，不存图片。 */
+  let mediaRecord: RunRecord['media'] | undefined;
 
   const markPhase = (name: string, ms: number, status: PhaseStatus, note?: string): void => {
     phases.push({ name, ms, status, ...(note ? { note } : {}) });
@@ -159,6 +165,7 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
         calls: llmCalls,
         costCny,
       },
+      ...(mediaRecord ? { media: mediaRecord } : {}),
     };
     const done = deps.runs.finish(record, status);
     deps.state.noteRun(status, localIso(now()));
@@ -215,7 +222,8 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
       notes.push('磁盘空间没查成（不影响运行）');
     }
     if (cfg.safety.killSwitch) problems.push('急停开着（safety.killSwitch=true）');
-    notes.push('不看画面：模型只读标题/简介/字幕/评论');
+    // 看画面开着时不写这句：真抽到（或没抽成）会在 Phase 5.5 给出准确的一句
+    if (!cfg.media.frames) notes.push('不看画面：模型只读标题/简介/字幕/评论（设置 → 看画面 可以打开）');
 
     if (problems.length > 0) {
       for (const problem of problems) errors.push(`预检失败：${problem}`);
@@ -427,9 +435,69 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
     return finish('degraded');
   }
 
+  // ---------------------------------------------------------------- Phase 5.5 看画面（默认关）
+  // 只对「深读里分最高的那条」抽帧：一次最多 2 张图（九宫格 + 字幕条），塞进深读请求。
+  // 任何一步失败都只降级成纯文本（§7.10 硬性约束），**不让整轮失败**。
+  const firstDeep = deepTargets[0];
+  const firstRead = firstDeep ? (deepReads.find((item) => item.bvid === firstDeep.bvid) ?? null) : null;
+  let visual: VisualResult | null = null;
+  let mediaNote: string | null = null;
+  if (cfg.media.frames) {
+    const phaseVisual = Date.now();
+    if (!firstRead) {
+      mediaNote = '没看画面：这一轮没有深读的视频';
+    } else {
+      try {
+        visual = await prepareVisuals(
+          {
+            config: cfg,
+            paths: deps.paths,
+            logger,
+            playUrl: (bvid, cid) => deps.api.playUrl(bvid, cid),
+            ...(deps.media ? { overrides: deps.media } : {}),
+          },
+          {
+            bvid: firstRead.bvid,
+            cid: firstRead.video.cid,
+            title: firstRead.video.title,
+            durationSec: firstRead.video.durationSec,
+            hasSubtitles: firstRead.subtitleChars > 0,
+          },
+        );
+        mediaNote = visual.note;
+        mediaRecord = visual.record;
+      } catch (err) {
+        // prepareVisuals 约定自己不抛；万一抛了，也只降级，不让这一轮失败
+        mediaNote = `没看画面：抽帧出错（${humanError(err)}）`;
+      }
+    }
+    markPhase('frames', Date.now() - phaseVisual, visual?.status === 'ok' ? 'ok' : 'degraded', mediaNote ?? undefined);
+    logger.event('media', mediaNote ?? '没看画面', {
+      level: visual?.status === 'ok' ? 'info' : 'warn',
+      data: { bvid: firstRead?.bvid ?? '', frames: visual?.record.frames ?? 0 },
+    });
+  }
+
   // ---------------------------------------------------------------- Phase 6+7 决策与写作
   const phase6 = Date.now();
-  const deepUser = `${preamble}\n\n${buildDeepPrompt({ deepReads, screen: screen.items, lightReads, config: cfg, dryRun: status.dryRun })}`;
+  const visualInfo =
+    visual && visual.status === 'ok' && firstRead
+      ? {
+          bvid: firstRead.bvid,
+          title: firstRead.video.title,
+          frames: visual.record.frames ?? cfg.media.frameCount,
+          hasStrip: Boolean(visual.record.strip),
+          hasSubtitles: firstRead.subtitleChars > 0,
+        }
+      : undefined;
+  const deepUser = `${preamble}\n\n${buildDeepPrompt({
+    deepReads,
+    screen: screen.items,
+    lightReads,
+    config: cfg,
+    dryRun: status.dryRun,
+    ...(visualInfo ? { visual: visualInfo } : {}),
+  })}`;
   const ctxForResult = {
     deepReadBvids: new Set(deepReads.map((d) => d.bvid)),
     maxVideos: cfg.content.maxVideos,
@@ -440,13 +508,20 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
 
   let result: RoundResult;
   let resultDegraded = false;
+  const visualReserve = visual && visual.status === 'ok' ? visual.tokenReserve : 0;
   const deepRun = await runAgentLoop({
     client: deps.llm,
     phase: 'deep',
     system: systemMessage,
     user: deepUser,
+    // 图片只随第一条深读请求发一次；「输出不合规重来一次」时不再重复附图（模型已经看过了）
+    ...(visual && visual.status === 'ok' ? { userImages: visual.images } : {}),
     runtime,
-    limits: { maxSteps: cfg.llm.maxSteps, maxToolCalls: cfg.llm.maxToolCalls, remainingTokens: remainingBudget() },
+    limits: {
+      maxSteps: cfg.llm.maxSteps,
+      maxToolCalls: cfg.llm.maxToolCalls,
+      remainingTokens: Math.max(1_000, remainingBudget() - visualReserve),
+    },
     logger,
   });
 
@@ -661,6 +736,7 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
     usage: { promptTokens: usage.promptTokens, completionTokens: usage.completionTokens, costCny: 0 },
     dryRun: effectiveDryRun,
     notes,
+    ...(mediaNote ? { media: { text: mediaNote } } : {}),
   });
   if (reportPath) logger.info('orchestrator', `报告已写入 ${reportPath}`);
 

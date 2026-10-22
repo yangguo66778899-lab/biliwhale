@@ -68,10 +68,15 @@ test('配置接口：读得到、分组元数据齐全、非法值被拒、改�
     assert.equal(got.ok, true);
     assert.ok(got.groups.length >= 6, '至少 6 个配置分组');
     const keys = got.groups.map((group) => group.key);
-    // media 组已删除（不抽帧、不看画面），改查其它必备分组
-    for (const expected of ['schedule', 'report', 'share', 'account', 'notify', 'ui']) {
+    for (const expected of ['schedule', 'report', 'share', 'account', 'notify', 'ui', 'media']) {
       assert.ok(keys.includes(expected), `缺少分组 ${expected}`);
     }
+
+    // 「看画面」的开关必须默认关（P0-1 的教训：默认开但永远不生效 = 假信号；§7.10 要求默认关）
+    const mediaGroup = got.groups.find((group) => group.key === 'media');
+    assert.equal(mediaGroup?.label, '看画面');
+    const frames = mediaGroup?.fields.find((field) => field.path === 'media.frames');
+    assert.equal(frames?.default, false, 'media.frames 默认必须是 false');
 
     // 关键回归：组内字段的 path 必须是「组.字段」的绝对路径。
     // （曾经只给字段名，面板把值写到顶层垃圾字段上，开关永远打不开。）

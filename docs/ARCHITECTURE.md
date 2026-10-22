@@ -44,6 +44,7 @@ daemon（src/daemon/）── 单实例 · 调度循环 · 心跳 · 优雅退�
    ├─ state/chatStore.ts      chat/owner.jsonl：追加/读最近 N/30 天清理/清空
    ├─ state/pending.ts        pending/replies.json：待审草稿与 7 天过期
    ├─ state/replied.ts        replied.json：谁回过我们、回过几次
+   ├─ media/frames.ts        看画面：取低清 mp4 → ffmpeg 抽帧拼 3×3 + 字幕条（默认关；只降级不失败）
    └─ config/describe.ts    配置元数据（面板表单由它渲染）
         │
         ▼

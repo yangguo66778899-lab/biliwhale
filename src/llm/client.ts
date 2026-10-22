@@ -15,11 +15,27 @@ export interface ToolCall {
   function: { name: string; arguments: string };
 }
 
+/**
+ * 消息内容：字符串，或「文字 + 图片」的内容块数组。
+ * 图片只能是 `data:image/jpeg;base64,...`（DeepSeek Vision 支持 base64/URL/Files API；
+ * 我们只用 base64，避免把本地文件路径或外链暴露给模型服务）。
+ */
+export type ImagePart = { type: 'image_url'; image_url: { url: string } };
+export type UserContent = string | Array<{ type: 'text'; text: string } | ImagePart>;
+
 export type ChatMessage =
   | { role: 'system'; content: string }
-  | { role: 'user'; content: string }
+  /** 图片只允许出现在 user 消息里（DeepSeek 协议要求）。 */
+  | { role: 'user'; content: UserContent }
   | { role: 'assistant'; content: string | null; tool_calls?: ToolCall[] }
   | { role: 'tool'; content: string; tool_call_id: string; name?: string };
+
+/** 把「一段文字 + 若干 data URL 图片」拼成 user 消息的内容块；没有图就返回纯字符串。 */
+export function userContent(text: string, images: readonly string[] = []): UserContent {
+  const usable = images.filter((url) => typeof url === 'string' && url.startsWith('data:image/'));
+  if (usable.length === 0) return text;
+  return [{ type: 'text', text }, ...usable.map((url) => ({ type: 'image_url' as const, image_url: { url } }))];
+}
 
 export interface JsonSchema {
   type: 'object';

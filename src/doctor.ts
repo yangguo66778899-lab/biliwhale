@@ -15,6 +15,7 @@ import { AutostartService } from './lifecycle/autostart.ts';
 import type { AutostartStatus } from './lifecycle/autostart.ts';
 import type { AppContext } from './bootstrap.ts';
 import { resolveOwner } from './account/owner.ts';
+import { probeFfmpeg } from './media/frames.ts';
 
 export type DoctorLevel = 'ok' | 'warn' | 'bad';
 
@@ -142,6 +143,17 @@ export async function runDoctor(ctx: AppContext, opts: DoctorOptions): Promise<D
     autostart.enabled ? `${autostart.mechanism === 'registry' ? '注册表 Run' : '启动文件夹'} · ${autostart.command ?? ''}` : autostart.warning ?? '未开启',
     autostart.enabled ? undefined : '托盘右键可以开',
   );
+
+  // 只在「看画面」真开着时才查 ffmpeg：关着的时候查它就是个吓人的假信号（P0-1 的教训）
+  if (cfg.media.frames) {
+    const ffmpeg = await probeFfmpeg(cfg.media.ffmpegPath);
+    push(
+      '看画面',
+      ffmpeg ? 'ok' : 'warn',
+      ffmpeg ? `ffmpeg：${ffmpeg}（每轮抽帧拼一张九宫格）` : '开着「看画面」但没找到 ffmpeg：这一轮会按纯文本跑',
+      ffmpeg ? undefined : '装好 ffmpeg，或在「设置 → 看画面 → ffmpeg 位置」填完整路径',
+    );
+  }
 
   if (opts.trayExe) {
     const exists = fs.existsSync(opts.trayExe);

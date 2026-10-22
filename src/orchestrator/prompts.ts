@@ -67,6 +67,14 @@ export function buildDeepPrompt(input: {
   lightReads: LightRead[];
   config: Config;
   dryRun: boolean;
+  /** 这一轮真的抽到画面时才有（§7.10）：图在 user 消息里，这里只写清「图是什么、能怎么用」。 */
+  visual?: {
+    bvid: string;
+    title: string;
+    frames: number;
+    hasStrip: boolean;
+    hasSubtitles: boolean;
+  };
 }): string {
   const screenMap = new Map(input.screen.map((s) => [s.bvid, s]));
   const blocks = input.deepReads.map((item, index) => {
@@ -78,6 +86,9 @@ export function buildDeepPrompt(input: {
       `- UP：${v.owner.name || '未知'} · 时长 ${Math.round(v.durationSec / 60)} 分钟 · 发布 ${v.pubdateIso.slice(0, 10) || '未知'} · 播放 ${v.stats.view} · 评论 ${v.stats.reply} · 点赞 ${v.stats.like}`,
     );
     if (screenItem) lines.push(`- 初筛：${screenItem.score}/20，理由：${screenItem.reason}`);
+    if (input.visual && input.visual.bvid === item.bvid) {
+      lines.push(`- 画面：附在图里（九宫格 ${input.visual.frames} 帧${input.visual.hasStrip ? ' + 字幕条' : ''}）`);
+    }
     if (v.desc) lines.push(`- 简介：${clip(v.desc, 400)}`);
     lines.push('');
     if (item.subtitleChars > 0) {
@@ -123,6 +134,21 @@ export function buildDeepPrompt(input: {
     : '动态开关是**关着**的：`dynamic` 写 `null`。';
 
   return [
+    ...(input.visual
+      ? [
+          '# 这一轮有画面（图片附在本条消息里）',
+          '',
+          `图的对象是 \`${input.visual.bvid}\`（${clip(input.visual.title, 60)}）：`,
+          `- 九宫格：${input.visual.frames} 帧，按时间从左到右、从上到下排；`,
+          ...(input.visual.hasStrip
+            ? ['- 字幕条：从画面下方裁出来的一条条，竖着拼在一起，每 7 秒一帧——这条视频没有字幕轨，硬字幕只能从画面里读。']
+            : [input.visual.hasSubtitles ? '- 字幕条没做（这条有字幕轨，字幕在上面给了）。' : '- 字幕条没做成（原因见「运行备注」）。']),
+          '- 图只是**素材**，不是唯一依据：看不清、认不准就按标题/简介/字幕/评论写，别硬猜。',
+          '- 可以写你**真的在图里看到**的东西（字幕条里的一句台词、画面里的物件）；没看到的不许编。',
+          '- 只有这一条视频有画面，别的视频没有：别把画面细节安到别的视频上。',
+          '',
+        ]
+      : []),
     '# 深读材料',
     '',
     ...blocks,

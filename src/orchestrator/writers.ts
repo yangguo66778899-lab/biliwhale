@@ -49,6 +49,8 @@ export interface ReportInput {
   notes: string[];
   /** 「今天为什么没做」（由 orchestrator/whynot.ts 生成，一行一条）。 */
   whyNot?: Array<{ label: string; text: string }>;
+  /** 看画面的结论（§7.10）：一行，「看了画面：…」或「没看画面：<原因>」。 */
+  media?: { text: string };
 }
 
 export function videoUrl(bvid: string): string {
@@ -85,6 +87,12 @@ export function buildReportSection(input: ReportInput): string {
   const head = `> 看了 ${counts.screened} 条，深读 ${counts.deepRead} 条，挑中 ${counts.selected} 条，分享 ${counts.shared} 条${input.dryRun ? '（预演，未真的发）' : ''}；本轮 ${formatTokens(input.usage.promptTokens + input.usage.completionTokens)} token。`;
   lines.push(head);
   lines.push('');
+
+  // 看画面到底看没看：用户不用翻日志就知道这次模型有没有图可看（§7.10）
+  if (input.media) {
+    lines.push(input.media.text);
+    lines.push('');
+  }
 
   // 用户最常问的「收藏不是开着吗，怎么没收藏」：两种档位都要写，不用去翻执行日志
   if (input.whyNot && input.whyNot.length > 0) {

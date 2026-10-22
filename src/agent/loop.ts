@@ -12,7 +12,7 @@
 import type { Logger } from '../shared/logger.ts';
 import type { Result } from '../shared/errors.ts';
 import type { ChatMessage, ToolDefinition, Usage } from '../llm/client.ts';
-import { LlmClient } from '../llm/client.ts';
+import { LlmClient, userContent } from '../llm/client.ts';
 import type { Phase } from './tools.ts';
 import { executeTool, toolDefinitions } from './tools.ts';
 import type { ToolRuntime } from './tools.ts';
@@ -43,6 +43,8 @@ export interface LoopInput {
   phase: Phase;
   system: string;
   user: string;
+  /** 给 user 消息附的图片（`data:image/jpeg;base64,...`）；只有开了「看画面」才会有。 */
+  userImages?: string[];
   runtime: ToolRuntime;
   limits: LoopLimits;
   logger: Logger;
@@ -57,9 +59,11 @@ const TOOL_FAILURE_BREAKER = 2;
 
 export async function runAgentLoop(input: LoopInput): Promise<Result<LoopOutcome>> {
   const tools: ToolDefinition[] = toolDefinitions(input.phase);
+  const images = input.userImages ?? [];
   const messages: ChatMessage[] = [
     { role: 'system', content: input.system },
-    { role: 'user', content: input.user },
+    // 图片只能进 user 消息；system / assistant 永远是纯文本（协议 + 测试都钉住这一点）
+    { role: 'user', content: userContent(input.user, images) },
   ];
 
   const usage: Usage = { promptTokens: 0, completionTokens: 0, cachedTokens: 0 };

@@ -47,18 +47,28 @@ test('零 Python：源码里不 spawn python / 不调用 pip / venv', () => {
   assert.deepEqual(hits, [], `不该有任何 Python 依赖：${JSON.stringify(hits)}`);
 });
 
-test('子进程只允许出现在「开机自启」这一处，且必须带 windowsHide 与超时', () => {
+test('子进程只允许出现在三处白名单里，且必须带 windowsHide 与超时', () => {
   // 注意用 (?<!\.) 排除 RegExp#exec —— 那是正则方法，不是进程
   const pattern = /child_process|spawnSync\s*\(|(?<!\.)\bspawn\s*\(|execFile\s*\(|execSync\s*\(|(?<!\.)\bexec\s*\(/;
   const hits = grep(SOURCE_FILES, pattern);
-  // 允许两处：autostart.ts（reg.exe）与 notify/index.ts（command 渠道，§7.11 要求的）
-  const allowedFiles = [path.join('lifecycle', 'autostart.ts'), path.join('notify', 'index.ts')];
+  // 允许三处：autostart.ts（reg.exe）、notify/index.ts（command 渠道，§7.11 要求）、
+  // media/frames.ts（ffmpeg 抽帧，§7.10 要求；文件名与参数都由代码拼，不接受外部输入）
+  const allowedFiles = [
+    path.join('lifecycle', 'autostart.ts'),
+    path.join('notify', 'index.ts'),
+    path.join('media', 'frames.ts'),
+  ];
   const disallowed = hits.filter((hit) => !allowedFiles.some((allowedFile) => hit.file.endsWith(allowedFile)));
-  assert.deepEqual(disallowed, [], `只有 autostart.ts 可以起子进程（reg.exe）：${JSON.stringify(disallowed)}`);
+  assert.deepEqual(disallowed, [], `只有白名单里的三个文件可以起子进程：${JSON.stringify(disallowed)}`);
 
   const text = fs.readFileSync(path.join(SRC, 'lifecycle', 'autostart.ts'), 'utf8');
   assert.match(text, /windowsHide:\s*true/, '子进程必须隐藏窗口');
   assert.match(text, /timeout:\s*\d+/, '子进程必须带超时');
+
+  // ffmpeg 同样要隐藏窗口 + 超时（超时按视频时长算，所以是变量而不是字面量）
+  const framesText = fs.readFileSync(path.join(SRC, 'media', 'frames.ts'), 'utf8');
+  assert.match(framesText, /windowsHide:\s*true/, 'ffmpeg 也必须隐藏窗口（不许弹黑框）');
+  assert.match(framesText, /timeout:\s*timeoutMs/, 'ffmpeg 必须带超时（120s + 时长 × 1.5）');
 });
 
 test('C3：源码与夹具里没有直播 / 弹幕相关字段或能力', () => {
