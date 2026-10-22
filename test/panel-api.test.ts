@@ -54,7 +54,8 @@ test('配置接口：读得到、分组元数据齐全、非法值被拒、改�
     assert.equal(got.ok, true);
     assert.ok(got.groups.length >= 6, '至少 6 个配置分组');
     const keys = got.groups.map((group) => group.key);
-    for (const expected of ['schedule', 'report', 'share', 'account', 'media', 'ui']) {
+    // media 组已删除（不抽帧、不看画面），改查其它必备分组
+    for (const expected of ['schedule', 'report', 'share', 'account', 'notify', 'ui']) {
       assert.ok(keys.includes(expected), `缺少分组 ${expected}`);
     }
 

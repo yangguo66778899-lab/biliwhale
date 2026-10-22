@@ -9,12 +9,18 @@ import { resolvePaths } from '../src/state/paths.ts';
 import { localDate } from '../src/shared/time.ts';
 import { tmpDir } from './helpers.ts';
 
-/** 写一份「马上就该醒」的配置：窗口在 00:00–00:02，宽限期给满一天。 */
+/** 写一份「马上就该醒」的配置：窗口围绕当前时间（过期不补，所以不能写死 00:00）。 */
 function immediateConfig(dir: string, opts: { skipChance?: number } = {}): void {
+  const now = new Date();
+  const hhmm = (offsetMin: number): string => {
+    const d = new Date(now.getTime() + offsetMin * 60_000);
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  };
   const config = {
     version: 1,
     schedule: {
-      windows: [{ start: '00:00', end: '00:02', wakes: 1, label: '测试窗口' }],
+      // 窗口放在「几分钟前」：在宽限期（1440 分钟）内，所以 tick 会立刻触发
+      windows: [{ start: hhmm(-10), end: hhmm(-8), wakes: 1, label: '测试窗口' }],
       skipChance: opts.skipChance ?? 0,
       maxWakesPerDay: 1,
       graceMinutes: 1440,
@@ -200,7 +206,7 @@ test('配置热更新：改 schedule 会重算，但不会多送一次唤醒（�
 
   try {
     const original = readState(dir).today as { slots: Array<{ atText: string }> };
-    assert.equal(original.slots[0]?.atText, '00:00');
+    assert.ok(original.slots.length >= 1, '应该排出一个「马上就该醒」的槽位');
 
     // 改成晚上 20:00–24:00，并把 skipChance 设为 0（避免随机）
     const configFile = path.join(dir, 'config.json');

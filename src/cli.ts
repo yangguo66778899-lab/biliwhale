@@ -5,7 +5,7 @@
  * 命令：
  *   run --now [--dry] [--fixtures]   跑一轮（默认按配置决定真发/预演；--dry 强制预演）
  *   serve                            守护进程：作息 + 本地控制接口（托盘靠它）
- *   doctor                           体检：目录/配置/凭据/网络/模型/自启/ffmpeg
+ *   doctor                           体检：目录/配置/凭据/网络/模型/自启/托盘
  *   config show|validate             看配置 / 校验配置
  *
  * 不做什么：不实现业务逻辑（都在 orchestrator/agent/bili/scheduler 里）。
@@ -416,20 +416,6 @@ async function commandUpdate(args: ParsedArgs): Promise<number> {
   return 0;
 }
 
-function findFfmpeg(configured: string): string | null {
-  if (configured) return fs.existsSync(configured) ? configured : null;
-  const exts = (process.env.PATHEXT ?? '.EXE').split(';');
-  for (const dir of (process.env.PATH ?? '').split(path.delimiter)) {
-    if (!dir) continue;
-    for (const ext of exts) {
-      const candidate = path.join(dir, `ffmpeg${ext.toLowerCase()}`);
-      if (fs.existsSync(candidate)) return candidate;
-      const upper = path.join(dir, `ffmpeg${ext.toUpperCase()}`);
-      if (fs.existsSync(upper)) return upper;
-    }
-  }
-  return null;
-}
 
 function help(): string {  return [
     `BiliWhale ${VERSION} — 常驻托盘、只调用 DeepSeek 的 B 站「养鱼」程序内核`,
@@ -437,7 +423,7 @@ function help(): string {  return [
     '用法：',
     '  node src/cli.ts serve [--autostart]               守护进程：作息 + 本地控制接口（托盘靠它）',
     '  node src/cli.ts run --now [--dry] [--fixtures]   手动跑一轮（只读，不写任何远端内容）',
-    '  node src/cli.ts doctor [--fixtures]              体检：目录/配置/凭据/网络/模型/自启/托盘/ffmpeg',
+    '  node src/cli.ts doctor [--fixtures]              体检：目录/配置/凭据/网络/模型/自启/托盘',
     '  node src/cli.ts config show                      打印当前配置（不含密钥）',
     '  node src/cli.ts config validate                  校验 config.json',
     '  node src/cli.ts backup [--with-secrets] [--data-only] [--out <zip>]   备份数据（默认含报告/日记，不含凭据）',

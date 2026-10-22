@@ -484,16 +484,6 @@ export const SPEC = {
       },
     },
 
-    media: {
-      kind: 'object',
-      label: '抽帧',
-      fields: {
-        frames: { kind: 'boolean', label: '允许抽帧看画面', desc: '找不到 ffmpeg 会自动跳过', default: true },
-        ffmpegPath: { kind: 'string', label: 'ffmpeg 路径', desc: '留空 = 从 PATH 找', default: '', maxLen: 260 },
-        frameCount: { kind: 'number', label: '抽几帧', default: 6, min: 0, max: 12, int: true },
-      },
-    },
-
     safety: {
       kind: 'object',
       label: '安全',

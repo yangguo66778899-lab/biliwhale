@@ -50,6 +50,8 @@ export interface GenerateInput {
   rand: RandomSource;
   /** 上一天剩下的、还没触发的槽位（跨零点的尾巴）。 */
   carryOver?: PlannedSlot[];
+  /** 宽限期（分钟）：槽位过了这个时间才算「错过」；宽限期内仍可触发。 */
+  graceMinutes?: number;
   /**
    * 今天**已经醒过**几次（重算计划时要扣掉）。
    * 审计 §2.5：不扣就会「每改一次配置 / 每暂停恢复一次，就白送一轮」，实测一天 5 次。
@@ -110,12 +112,17 @@ export function generateDayPlan(input: GenerateInput): DayPlan | null {
     const window = usable[0] as ScheduleWindow;
     const { from, to } = windowRange(window);
     const at = randomMinute(from, to, input.rand);
+    const slot = slotAt(baseMs, at, window, 'skip');
+    // 过了宽限期才算过期；宽限期内仍然可以触发（用户 2026-10-22：过了就不补）
+    if (isExpired(slot.atMs, input)) {
+      return { date, action: 'skip', targetWakes: 0, reason: '今天的时间都过了，不补跑', slots: [...carry] };
+    }
     return {
       date,
       action: 'skip',
       targetWakes: 1,
       reason: '今天不想看（掷骰命中）',
-      slots: [...carry, slotAt(baseMs, at, window, 'skip')].sort((a, b) => a.atMs - b.atMs),
+      slots: [...carry, slot].sort((a, b) => a.atMs - b.atMs),
     };
   }
 
@@ -154,13 +161,27 @@ export function generateDayPlan(input: GenerateInput): DayPlan | null {
     }
   }
 
+  // 已经过期（超过宽限期）的时刻不排进计划（审计 §3.28 / 用户口径：过了不补，但当天剩余窗口照常醒）
+  const future = slots.filter((slot) => !isExpired(slot.atMs, input));
+  const dropped = slots.length - future.length;
   return {
     date,
     action: 'wake',
-    targetWakes: slots.length,
-    reason: null,
-    slots: slots.sort((a, b) => a.atMs - b.atMs),
+    targetWakes: future.length,
+    reason:
+      future.length === 0 && dropped > 0
+        ? `今天的窗口都过了（${dropped} 个时刻作废，不补跑）`
+        : dropped > 0
+          ? `有 ${dropped} 个时刻已经过去，不补跑`
+          : null,
+    slots: future.sort((a, b) => a.atMs - b.atMs),
   };
+}
+
+/** 槽位是否已经「过期」（超过宽限期，不再补）。 */
+function isExpired(atMs: number, input: GenerateInput): boolean {
+  const graceMs = Math.max(0, input.graceMinutes ?? 0) * 60_000;
+  return atMs + graceMs <= input.now.getTime();
 }
 
 /** 在 [from, to) 里取一分钟，避开两端各一分钟。 */

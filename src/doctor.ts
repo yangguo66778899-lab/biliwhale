@@ -2,7 +2,7 @@
  * 体检（doctor）。
  *
  * 职责：把「这台机器上现在能不能正常跑」查清楚，返回结构化结果：
- *   Node/目录/配置/凭据/登录态/ffmpeg/磁盘/单实例锁/控制接口/心跳/自启/托盘/模型列表。
+ *   Node/目录/配置/凭据/登录态/磁盘/单实例锁/控制接口/心跳/自启/托盘/模型列表。
  *   CLI（`doctor`）与面板（`/api/doctor`）共用这一份，避免两边口径不一致。
  * 不做什么：不修任何东西、不写配置、不发写请求。
  */
@@ -59,7 +59,6 @@ export interface DoctorOptions {
   /** 自启命令（默认托盘 exe）。 */
   autostartCommand?: string;
   trayExe?: string;
-  ffmpegPath?: string;
 }
 
 export async function runDoctor(ctx: AppContext, opts: DoctorOptions): Promise<DoctorReport> {
@@ -97,8 +96,6 @@ export async function runDoctor(ctx: AppContext, opts: DoctorOptions): Promise<D
     push('主人（你）', 'bad', owner.problem ?? '主人没配好', '面板「账号」页 → 主人 UID（必须是另一个号，不能填鲸鲸的 UID）');
   }
 
-  const ffmpeg = findFfmpeg(opts.ffmpegPath ?? cfg.media.ffmpegPath);
-  push('ffmpeg', ffmpeg ? 'ok' : 'warn', ffmpeg ?? '没找到（不抽帧，可忽略）', '可选：装 ffmpeg 后用于抽帧');
 
   try {
     const stat = fs.statfsSync(ctx.paths.dataDir);
@@ -227,17 +224,3 @@ export async function runDoctor(ctx: AppContext, opts: DoctorOptions): Promise<D
   };
 }
 
-export function findFfmpeg(configured: string): string | null {
-  if (configured) return fs.existsSync(configured) ? configured : null;
-  const exts = (process.env.PATHEXT ?? '.EXE').split(';');
-  for (const dir of (process.env.PATH ?? '').split(path.delimiter)) {
-    if (!dir) continue;
-    for (const ext of exts) {
-      const lower = path.join(dir, `ffmpeg${ext.toLowerCase()}`);
-      if (fs.existsSync(lower)) return lower;
-      const upper = path.join(dir, `ffmpeg${ext.toUpperCase()}`);
-      if (fs.existsSync(upper)) return upper;
-    }
-  }
-  return null;
-}

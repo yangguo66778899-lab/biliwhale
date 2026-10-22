@@ -214,7 +214,7 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
       notes.push('磁盘空间没查成（不影响运行）');
     }
     if (cfg.safety.killSwitch) problems.push('急停开着（safety.killSwitch=true）');
-    notes.push('不抽帧：模型是纯文本的，画面进不了提示词（配置里也不再提供这个开关）');
+    notes.push('不看画面：模型只读标题/简介/字幕/评论');
 
     if (problems.length > 0) {
       for (const problem of problems) errors.push(`预检失败：${problem}`);

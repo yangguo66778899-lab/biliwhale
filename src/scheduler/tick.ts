@@ -66,6 +66,7 @@ export function tick(input: TickInput): TickOutcome {
       // 配置变更时**不带**：用户改了窗口，就该按新窗口重排，旧时刻作废。
       carryOver: stale ? carryOverSlots(plan, nowMs) : [],
       wakesAlready: input.wakesAlready ?? 0,
+      graceMinutes: input.config.graceMinutes,
     } satisfies GenerateInput);
     if (!generated) return { kind: 'none', reason: '没有可用的作息窗口，只能手动跑' };
     return { kind: 'replanned', plan: generated, generated: stale };

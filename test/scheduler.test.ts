@@ -159,11 +159,21 @@ test('tick：跨天重算，且配置变更强制重算', () => {
     assert.equal(replanned.plan.date, '2026-10-22');
   }
 
-  const invalidated = tick({ now: at('2026-10-21', '15:00'), plan, config: config({ windows: [noon] }), rand: scriptedRandom([780]), paused: false, invalidate: true });
-  assert.equal(invalidated.kind, 'replanned');
-  if (invalidated.kind === 'replanned') {
-    assert.equal(invalidated.generated, false, '配置变更不是「新的一天」');
-    assert.equal(invalidated.plan.slots[0]?.window.includes('12:00'), true);
+  // 15:00 改成「中午 12:00–14:00」：那个时刻已经过去了 → 不补跑，不排槽位
+  const stale = tick({ now: at('2026-10-21', '15:00'), plan, config: config({ windows: [noon] }), rand: scriptedRandom([780]), paused: false, invalidate: true });
+  assert.equal(stale.kind, 'replanned');
+  if (stale.kind === 'replanned') {
+    assert.equal(stale.generated, false, '配置变更不是「新的一天」');
+    assert.equal(stale.plan.slots.length, 0, '已经过去的时刻不该排进计划');
+    assert.match(stale.plan.reason ?? '', /不补跑/);
+  }
+
+  // 15:00 改成「晚上 20:00–24:00」：未来的窗口照常排
+  const future = tick({ now: at('2026-10-21', '15:00'), plan, config: config({ windows: [evening] }), rand: scriptedRandom([1230]), paused: false, invalidate: true });
+  assert.equal(future.kind, 'replanned');
+  if (future.kind === 'replanned') {
+    assert.equal(future.generated, false);
+    assert.equal(future.plan.slots[0]?.window.includes('20:00'), true);
   }
 });
 
@@ -263,4 +273,51 @@ test('额度：新的一天（已醒 0）才按新窗口排 20:xx', () => {
     rand: scriptedRandom([1230]),
   });
   assert.equal(plan?.slots[0]?.atText, '20:30');
+});
+
+
+/* ---------------- 过期不补（用户 2026-10-22 口径） ---------------- */
+
+test('计划：窗口已过且超出宽限期 → 不排槽位，并写明不补跑', () => {
+  const now = at('2026-10-21', '14:30'); // 窗口 12:00–14:00 已过 30 分钟，宽限 20 分钟
+  const plan = generateDayPlan({
+    now,
+    windows: [noon],
+    skipChance: 0,
+    maxWakesPerDay: 2,
+    graceMinutes: 20,
+    rand: scriptedRandom([800]),
+  });
+  assert.ok(plan);
+  assert.deepEqual(plan?.slots, [], '过期的不排进计划');
+  assert.equal(plan?.targetWakes, 0);
+  assert.match(plan?.reason ?? '', /不补跑/);
+});
+
+test('计划：窗口刚过但还在宽限期内 → 仍然保留（应该立刻触发）', () => {
+  const now = at('2026-10-21', '14:10'); // 窗口 12:00–14:00，刚过 10 分钟，宽限 20 分钟
+  const plan = generateDayPlan({
+    now,
+    windows: [noon],
+    skipChance: 0,
+    maxWakesPerDay: 2,
+    graceMinutes: 20,
+    // 槽位落在 13:55（835）→ 距离 now(14:10) 15 分钟，在 20 分钟宽限内
+    rand: scriptedRandom([835]),
+  });
+  assert.equal(plan?.slots.length, 1, '宽限期内的槽位要留着');
+});
+
+test('计划：窗口已过、宽限期内也要扣掉「今天已醒」的次数', () => {
+  const now = at('2026-10-21', '14:10');
+  const plan = generateDayPlan({
+    now,
+    windows: [noon],
+    skipChance: 0,
+    maxWakesPerDay: 2,
+    wakesAlready: 2,
+    graceMinutes: 20,
+    rand: scriptedRandom([800]),
+  });
+  assert.deepEqual(plan?.slots, []);
 });
