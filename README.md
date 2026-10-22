@@ -78,7 +78,7 @@ shell\BiliWhaleTray.exe
 node src/cli.ts run --now --dry
 
 # 6) 验证
-npm test              # 201 个用例：写层/闸门/幂等/复核/风控/审批/面板/登录/二维码/调度/守护进程/离线整轮
+npm test              # 206 个用例：写层/闸门/幂等/复核/风控/审批/面板/登录/二维码/调度/守护进程/离线整轮
 npm run m0:offline    # 夹具整轮：不联网、不需要凭据
 npm run m0:live-read  # 真实 B 站数据 + 占位模型（不代表模型质量）
 npm run smoke:bili    # 真 B 站只读冒烟：WBI / 搜索 / 视频 / 评论 / 字幕轨
@@ -193,7 +193,7 @@ src/
 └── shared/             # 类型、日志（脱敏）、原子写、时间、错误分类
 shell/BiliWhaleTray.cs  # C# 5 托盘（源码入库，exe 由 npm run tray:build 生成）
 scripts/                # smoke-bili.ts（真接口只读冒烟）、smoke-panel.mts、build-tray.ps1
-test/                   # 单元 + 集成（201 个用例，含二维码对拍与面板渲染）
+test/                   # 单元 + 集成（206 个用例，含二维码对拍与面板渲染）
 fixtures/               # 离线夹具（B 站响应、模型输出）
 docs/                   # 架构说明、B 站接口规格、M0/M1/M2/M3 验收记录
 ```

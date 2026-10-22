@@ -31,7 +31,8 @@ const el = (tag, attrs = {}, children = []) => {
     if (key === 'class') node.className = value;
     else if (key === 'text') node.textContent = value;
     else if (key === 'html') node.innerHTML = value;
-    else if (key.startsWith('on') && typeof value === 'function') node.addEventListener(key.slice(2), value);
+    // onClick → 'click'：事件名大小写敏感，slice(2) 会得到 "Click"，那样注册的监听永远不会触发
+    else if (key.startsWith('on') && typeof value === 'function') node.addEventListener(key.slice(2).toLowerCase(), value);
     else if (value !== undefined && value !== null) node.setAttribute(key, String(value));
   }
   for (const child of [].concat(children)) {
@@ -560,7 +561,7 @@ async function renderAccount() {
       el('div', { class: 'row' }, [el('span', {}, ['本地凭据']), el('span', { class: 'mono' }, [account.fingerprint || '—'])]),
       el('div', { class: 'hint', text: account.note || '' }),
       el('div', { class: 'actions' }, [
-        el('button', { class: 'primary', onClick: () => startQr() }, ['扫码登录']),
+        el('button', { class: 'primary', onClick: () => startQr() }, ['生成二维码']),
         el('button', { onClick: () => recheck() }, ['重新验证']),
         el('button', { class: 'danger', onClick: () => logout() }, ['退出登录']),
       ]),
@@ -568,9 +569,9 @@ async function renderAccount() {
   );
 
   const qrCard = el('div', { class: 'card', id: 'qr-card' }, [
-    el('h3', {}, ['扫码登录']),
+    el('h3', {}, ['二维码']),
     el('div', { class: 'hint', text: '用手机 B 站 App 扫这个码；页面每 2 秒查一次状态。' }),
-    el('div', { class: 'qr-empty', id: 'qr-box', text: '点上面的「扫码登录」生成二维码' }),
+    el('div', { class: 'qr-empty', id: 'qr-box', text: '正在生成二维码…' }),
     el('div', { class: 'hint', id: 'qr-state', text: '' }),
   ]);
   panel.appendChild(qrCard);
@@ -585,6 +586,9 @@ async function renderAccount() {
     el('div', { class: 'actions' }, [el('button', { class: 'primary', onClick: () => saveCookie(area.value) }, ['保存并验证'])]),
   );
   panel.appendChild(cookieCard);
+
+  // 没登录就直接把二维码画出来，不用先点按钮（点了没反应的按钮是最糟的体验）
+  if (!account.loggedIn) await startQr();
 }
 
 async function startQr() {
