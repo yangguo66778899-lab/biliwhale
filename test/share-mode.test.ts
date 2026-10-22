@@ -36,12 +36,15 @@ import type { Result } from '../src/shared/errors.ts';
 
 class FakeTransport implements Transport {
   readonly calls: TransportRequest[] = [];
+  /** 模拟「发到一半进程挂了 / 网络层直接抛」：用来验证判重账本已经写过。 */
+  throwOnWrite = false;
   envelope: { code: number; message: string; data: unknown } = { code: 0, message: '0', data: { rpid: 999, rpid_str: '999' } };
   async json<T>(): Promise<Result<T>> {
     return { ok: true, data: this.envelope as unknown as T };
   }
   async jsonEnvelope<T>(req: TransportRequest): Promise<Result<{ code: number; message: string; data: T }>> {
     this.calls.push(req);
+    if (this.throwOnWrite) throw new Error('模拟：发送过程中断');
     return { ok: true, data: this.envelope as { code: number; message: string; data: T } };
   }
 }
@@ -176,3 +179,17 @@ test('预演（safety.dryRun 打开）：一个写请求都不发，报告与提
   const joined = h.prompts.join('\n');
   assert.ok(joined.includes('只读预演'), '预演时要提示模型这是只读预演');
 });
+
+test('发送阶段抛异常：判重账本里已经有这条视频（下一轮不会再把它推出来重发）', async () => {
+  const h = harness({ dryRunInConfig: false });
+  h.transport.throwOnWrite = true;
+
+  // 模拟「发评论时进程被杀 / 网络层抛错」：整轮会向上抛，后面的落盘都不会发生
+  await assert.rejects(runRound(h.deps, { trigger: 'manual', dryRun: false }));
+
+  const firstSelected = 'BV1a0000001'; // fixtures/llm/deep.json 里挑中的第一条
+  const entry = h.deps.seen.get(firstSelected);
+  assert.ok(entry, '发送过程中途失败也必须先把「已看过」写进账本，否则下一轮会重选、重发');
+  assert.equal(entry?.lastDecision, 'selected');
+});
+
