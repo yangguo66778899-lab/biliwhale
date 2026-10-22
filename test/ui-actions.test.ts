@@ -128,6 +128,8 @@ async function loadPanel(hash = '#/account'): Promise<Harness> {
       warnings: [],
     },
     '/api/doctor': { ok: true, report: { healthy: true, dataDir: 'D:/d', rows: [] } },
+    '/api/config': { ok: true, config: {}, groups: [], defaults: {}, issues: [] },
+    '/api/secrets': { ok: true, hasApiKey: false, fingerprint: '', source: 'none' },
     '/api/pending': {
       ok: true,
       count: 1,
@@ -247,6 +249,28 @@ test('账号页：粘贴 cookie 会打 /api/account/cookie', async () => {
     h.calls.some((call) => call.url === '/api/account/cookie' && call.method === 'POST'),
     '应该请求 /api/account/cookie',
   );
+});
+
+test('设置页：填 DeepSeek key 后点「保存并验证」会 PUT /api/secrets/llm', async () => {
+  const h = await loadPanel('#/settings');
+  assert.deepEqual(h.errors, [], h.errors.join(' | '));
+  const panel = h.bySelector.get('#panel-settings');
+  assert.ok(panel);
+
+  const inputs = findAll(panel, (node) => node.tagName === 'INPUT');
+  assert.ok(inputs.length > 0, '设置页应该有输入框');
+  const keyInput = inputs[0] as Node & { value: string };
+  keyInput.value = 'sk-test-0123456789abcdef';
+
+  const save = buttons(panel).find((button) => textOf(button).includes('保存并验证'));
+  assert.ok(save, `找不到「保存并验证」：${buttons(panel).map(textOf).join(' / ')}`);
+  save.click();
+  for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setImmediate(resolve));
+
+  const call = h.calls.find((item) => item.url === '/api/secrets/llm');
+  assert.ok(call, `应该 PUT /api/secrets/llm，实际：${h.calls.map((item) => `${item.method} ${item.url}`).join(' / ')}`);
+  assert.equal(call?.method, 'PUT');
+  assert.deepEqual(call?.body, { apiKey: 'sk-test-0123456789abcdef' }, '要把输入框里的 key 发出去');
 });
 
 test('概览页：预演一轮 → dryRun=true，现在跑一轮 → dryRun=false', async () => {

@@ -25,6 +25,7 @@ import { encodeQr, matrixToRows } from '../qr/encoder.ts';
 import { buildDiagBundle, diagFileName } from '../diagnostics.ts';
 import { approvePending, rejectPending, scanStrangerReplies } from '../orchestrator/pending.ts';
 import { makeReplyDraft } from '../orchestrator/replyDraft.ts';
+import { discoverModel, keyFingerprint } from '../llm/discovery.ts';
 import { deleteOwnComment } from '../orchestrator/manual.ts';
 import { runDoctor } from '../doctor.ts';
 import type { AutostartService } from '../lifecycle/autostart.ts';
@@ -313,6 +314,66 @@ export function createHandlers(deps: PanelDeps): AllHandlers {
       const doctor = await runDoctor(ctx, { version, fixtures: deps.fixtures, mockModel: deps.mockModel, offline: true });
       const bundle = await buildDiagBundle(ctx, { version, doctor });
       return { filename: diagFileName(), json: JSON.stringify(bundle, null, 2) };
+    },
+
+    /* ---------------- 凭据（DeepSeek key） ---------------- */
+
+    secretsStatus() {
+      const envSet = Boolean(process.env.BILIWHALE_API_KEY?.trim());
+      const key = ctx.secrets.apiKey();
+      return {
+        hasApiKey: key.length > 0,
+        fingerprint: key ? keyFingerprint(key) : '',
+        source: envSet ? ('env' as const) : key ? ('file' as const) : ('none' as const),
+      };
+    },
+
+    async saveApiKey(apiKey: string) {
+      const clean = apiKey.trim();
+      if (!clean) return { ok: false, message: 'key 是空的' };
+      if (!/^sk-[A-Za-z0-9_-]{10,}$/.test(clean)) {
+        return { ok: false, message: '看起来不像 DeepSeek key：应该以 sk- 开头，后面一串字母数字' };
+      }
+      if (process.env.BILIWHALE_API_KEY?.trim()) {
+        return {
+          ok: false,
+          message: '环境变量 BILIWHALE_API_KEY 正在生效，面板里存的会被它盖住；先去调整那个环境变量（否则保存了也不生效）',
+        };
+      }
+
+      // 先拿新 key 试一次，验过了才落盘：填错不该把原来能用的 key 覆盖掉
+      const previous = ctx.secrets.apiKey();
+      ctx.llm.setApiKey(clean);
+
+      // 夹具/模拟模式不联网验证，直接算保存成功
+      if (deps.fixtures || deps.mockModel) {
+        ctx.secrets.setApiKey(clean);
+        return { ok: true, message: '已保存（当前是夹具/模拟模式，没有真的验证）' };
+      }
+
+      const models = await ctx.llm.listModels();
+      if (!models.ok) {
+        ctx.llm.setApiKey(previous);
+        return { ok: false, message: `验证没通过：${models.error.message}（key 填错了？没有保存）` };
+      }
+
+      ctx.secrets.setApiKey(clean);
+      ctx.logger.event('llm', '面板里更新了 DeepSeek key', { target: 'http', data: { fingerprint: keyFingerprint(clean) } });
+      const decision = await discoverModel({
+        client: ctx.llm,
+        configured: ctx.config.get().llm.model,
+        modelAuto: ctx.config.get().llm.modelAuto,
+        logger: ctx.logger,
+      });
+      ctx.llm.setModel(decision.model);
+      ctx.state.setModelCache({ name: decision.model, discoveredAt: localIso(), keyFingerprint: keyFingerprint(clean) });
+      ctx.logger.event('llm', `换 key 后自动发现模型：${decision.model}`, { target: 'http' });
+      return {
+        ok: true,
+        message: `验证通过：可用模型 ${models.data.length} 个，接下来用 ${decision.model}`,
+        model: decision.model,
+        models: models.data.slice(0, 8),
+      };
     },
 
     /* ---------------- 待审（M3） ---------------- */

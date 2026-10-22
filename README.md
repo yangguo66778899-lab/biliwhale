@@ -78,7 +78,7 @@ shell\BiliWhaleTray.exe
 node src/cli.ts run --now --dry
 
 # 6) 验证
-npm test              # 206 个用例：写层/闸门/幂等/复核/风控/审批/面板/登录/二维码/调度/守护进程/离线整轮
+npm test              # 207 个用例：写层/闸门/幂等/复核/风控/审批/面板/登录/二维码/调度/守护进程/离线整轮
 npm run m0:offline    # 夹具整轮：不联网、不需要凭据
 npm run m0:live-read  # 真实 B 站数据 + 占位模型（不代表模型质量）
 npm run smoke:bili    # 真 B 站只读冒烟：WBI / 搜索 / 视频 / 评论 / 字幕轨
@@ -134,10 +134,13 @@ npm run smoke:bili    # 真 B 站只读冒烟：WBI / 搜索 / 视频 / 评论 /
 
 凭据（不进仓库、不进日志）：
 
-- DeepSeek：环境变量 `BILIWHALE_API_KEY`，或首次运行时写入 `<data>/secrets.json`，或在面板「设置」里填
-- B 站：面板「账号」页扫码（推荐），或粘 `SESSDATA=...; bili_jct=...; buvid3=...`，或环境变量 `BILIWHALE_COOKIE`
+- **DeepSeek key（必须有，否则跑不了任何一轮——「预演」也要真调模型）**：
+  面板 → **设置** → 最上面的「DeepSeek key」卡片，粘进去点「保存并验证」。
+  会先用新 key 拉一次 `/models`：**验过了才落盘**，填错不会覆盖原来能用的 key；成功后会顺手自动发现模型。
+  也可以用环境变量 `BILIWHALE_API_KEY`（它优先级更高，设了之后面板里存的不生效），或直接写 `<data>/secrets.json`。
+- B 站：面板「账号」页扫码（推荐），或粘 `SESSDATA=...; bili_jct=...; buvid3=...`，或环境变量 `BILIWHALE_COOKIE`。没登录也能跑，但拿不到字幕，几乎每条都会被「无字幕」跳过。
 
-面板改配置写的是 `<data>/config.json`（原子写 + `.bak`）；凭据永远单独放 `secrets.json`，导出配置不会带上它们。
+面板改配置写的是 `<data>/config.json`（原子写 + `.bak`）；凭据永远单独放 `secrets.json`，导出配置与诊断包都不会带上它们，面板也只显示指纹（如 `sk-…a1b2`）。
 
 数据目录（Windows 标准位置，全新开始，不读任何旧数据）：
 
@@ -193,7 +196,7 @@ src/
 └── shared/             # 类型、日志（脱敏）、原子写、时间、错误分类
 shell/BiliWhaleTray.cs  # C# 5 托盘（源码入库，exe 由 npm run tray:build 生成）
 scripts/                # smoke-bili.ts（真接口只读冒烟）、smoke-panel.mts、build-tray.ps1
-test/                   # 单元 + 集成（206 个用例，含二维码对拍与面板渲染）
+test/                   # 单元 + 集成（207 个用例，含二维码对拍与面板渲染）
 fixtures/               # 离线夹具（B 站响应、模型输出）
 docs/                   # 架构说明、B 站接口规格、M0/M1/M2/M3 验收记录
 ```

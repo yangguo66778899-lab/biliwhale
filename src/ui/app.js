@@ -318,11 +318,12 @@ async function togglePause(paused) {
 async function renderSettings() {
   const panel = $('#panel-settings');
   panel.innerHTML = '<h1>设置</h1><div class="card">读取中…</div>';
-  const data = await api('/api/config');
+  const [data, secrets] = await Promise.all([api('/api/config'), api('/api/secrets')]);
   state.config = data;
 
   panel.innerHTML = '';
   panel.appendChild(el('h1', {}, ['设置']));
+  panel.appendChild(renderKeyCard(secrets));
   panel.appendChild(
     el('div', { class: 'card' }, [
       el('div', { class: 'hint', text: '保存即生效。作息（schedule）改了会让调度器重算计划；其它字段下一次调用生效。' }),
@@ -471,6 +472,49 @@ function setValueAt(root, path, value) {
     cursor = cursor[key];
   }
   cursor[keys[keys.length - 1]] = value;
+}
+
+/** DeepSeek key：只写不读——已经配置时只显示指纹，永远不回显原值。 */
+function renderKeyCard(secrets) {
+  const status =
+    secrets.source === 'env'
+      ? '环境变量 BILIWHALE_API_KEY 正在生效（面板里存的不生效）'
+      : secrets.hasApiKey
+        ? `已配置：${secrets.fingerprint}`
+        : '还没配 key：没有它跑不了任何一轮（预演也要真调模型）';
+  const input = el('input', { type: 'password', placeholder: 'sk-…（只保存在本机 secrets.json）' });
+  const card = el('div', { class: 'card' }, [
+    el('h2', {}, ['DeepSeek key']),
+    el('div', { class: secrets.hasApiKey ? 'hint' : 'issue warn', text: status }),
+    el('div', { class: 'hint', text: '拿 key：platform.deepseek.com → API keys。填进来点保存会立刻验证并列出可用模型。' }),
+    el('label', { text: secrets.hasApiKey ? '换一个 key（留空不动）' : '粘贴 key' }),
+    input,
+    el('div', { class: 'actions' }, [
+      el('button', { class: 'primary', onClick: () => saveKey(input.value) }, ['保存并验证']),
+      el('button', { onClick: () => renderSettings() }, ['刷新状态']),
+    ]),
+    el('div', { id: 'key-result', class: 'hint', text: '' }),
+  ]);
+  return card;
+}
+
+async function saveKey(apiKey) {
+  if (!apiKey || !apiKey.trim()) {
+    toast('先把 key 粘进来', true);
+    return;
+  }
+  const box = $('#key-result');
+  if (box) box.textContent = '正在验证…';
+  try {
+    const res = await api('/api/secrets/llm', { method: 'PUT', body: { apiKey } });
+    const models = Array.isArray(res.models) && res.models.length > 0 ? `（${res.models.join(', ')}）` : '';
+    toast(`${res.message}${models}`, !res.ok);
+    if (box) box.textContent = `${res.message}${models}`;
+    if (res.ok) await renderSettings();
+  } catch (err) {
+    toast(String(err.message || err), true);
+    if (box) box.textContent = String(err.message || err);
+  }
 }
 
 function showIssues(issues) {

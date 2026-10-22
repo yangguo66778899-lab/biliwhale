@@ -125,6 +125,10 @@ export interface PanelHandlers {
   scanPending(): Promise<unknown>;
   /** M3：删自己发过的评论（面板手动、二次确认）。 */
   deleteComment(bvid: string, rpid: string, dryRun?: boolean): Promise<ActionResult>;
+  /** DeepSeek key 的状态（只给指纹，绝不回显原值）。 */
+  secretsStatus(): { hasApiKey: boolean; fingerprint: string; source: 'env' | 'file' | 'none' };
+  /** 在面板里填/换 DeepSeek key，保存后立刻验证并生效。 */
+  saveApiKey(apiKey: string): Promise<ActionResult & { models?: string[]; model?: string }>;
 }
 
 export interface ControlServerOptions {
@@ -330,6 +334,26 @@ export class ControlServer {
       const handler = this.handlers.models;
       if (!handler) return this.notImplemented(res, 'models');
       this.sendJson(res, 200, { ok: true, ...(handler() as object) });
+      return;
+    }
+
+    /* ---- 凭据（DeepSeek key） ---- */
+
+    if (method === 'GET' && url.pathname === '/api/secrets') {
+      const handler = this.handlers.secretsStatus;
+      if (!handler) return this.notImplemented(res, 'secrets');
+      this.sendJson(res, 200, { ok: true, ...handler() });
+      return;
+    }
+
+    if (method === 'PUT' && url.pathname === '/api/secrets/llm') {
+      const handler = this.handlers.saveApiKey;
+      if (!handler) return this.notImplemented(res, 'secrets/llm');
+      const body = await readJsonBody(req);
+      const apiKey = isRecord(body) && typeof body.apiKey === 'string' ? body.apiKey : '';
+      if (!apiKey.trim()) return this.sendJson(res, 400, { ok: false, message: 'key 是空的' });
+      const result = await handler(apiKey);
+      this.sendJson(res, result.ok ? 200 : 422, result);
       return;
     }
 

@@ -188,6 +188,32 @@ test('体检与诊断包：都能出，且诊断包里不含凭据', async () =>
     }
     assert.equal(doctor.report.rows.find((row) => row.name === '单实例锁')?.level, 'warn', '自己在跑，锁那一行应该是 warn');
 
+    // DeepSeek key：状态只给指纹；格式不对的 key 要拒；合法的 key 能存进 secrets.json
+    const secretsStatus = (await (await fetch(`${base}/api/secrets`, { headers: auth })).json()) as {
+      ok: boolean;
+      hasApiKey: boolean;
+      fingerprint: string;
+    };
+    assert.equal(secretsStatus.ok, true);
+    assert.equal(secretsStatus.hasApiKey, false);
+
+    const badKey = await fetch(`${base}/api/secrets/llm`, { method: 'PUT', headers: write(csrf, auth), body: JSON.stringify({ apiKey: 'nope' }) });
+    assert.equal(badKey.status, 422);
+
+    const goodKey = await fetch(`${base}/api/secrets/llm`, {
+      method: 'PUT',
+      headers: write(csrf, auth),
+      body: JSON.stringify({ apiKey: 'sk-test-0123456789abcdef' }),
+    });
+    assert.equal(goodKey.status, 200);
+    const saved = JSON.parse(fs.readFileSync(path.join(dir, 'secrets.json'), 'utf8')) as { llm?: { apiKey?: string } };
+    assert.equal(saved.llm?.apiKey, 'sk-test-0123456789abcdef');
+
+    const after = (await (await fetch(`${base}/api/secrets`, { headers: auth })).json()) as { hasApiKey: boolean; fingerprint: string };
+    assert.equal(after.hasApiKey, true);
+    assert.ok(after.fingerprint.length > 0, '要给出指纹（不是原值）');
+    assert.equal(after.fingerprint.includes('0123456789abcdef'), false, '指纹不能是原值');
+
     // M3：待审队列（空队列也要能读；批准/拒绝不存在的东西回 409）
     const pendingList = (await (await fetch(`${base}/api/pending`, { headers: auth })).json()) as { ok: boolean; count: number; items: unknown[] };
     assert.equal(pendingList.ok, true);

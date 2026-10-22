@@ -96,6 +96,11 @@ export class LlmClient {
     this.opts.model = model;
   }
 
+  /** 面板里填了新 key 之后立刻生效，不用重启内核。 */
+  setApiKey(apiKey: string): void {
+    this.opts.apiKey = apiKey.trim();
+  }
+
   /** 一轮对话（可能带工具调用）。 */
   async chat(req: ChatRequest): Promise<Result<ChatResult>> {
     const body: Record<string, unknown> = {
