@@ -293,6 +293,69 @@ export class BiliApi implements WbiProvider {
     return { ok: true, data: found };
   }
 
+  /**
+   * 复核（更准）：区分「没发出去」和「发出去了但被 B 站挂起」。
+   *
+   * 真机教训：评论发送成功、rpid 真实存在，但公开列表（sort=0）里看不到——B 站给的 `state=17`
+   * 表示审核中/仅自己可见，不带 cookie 的人完全看不到。旧逻辑只查 sort=0 第一页，
+   * 于是连续三条都报「复核未通过」，看起来像程序坏了。
+   *
+   * 按代价从低到高查三步：
+   *   1. `sort=0` 第一页（正常显示：state=0）
+   *   2. `sort=1` 第一页（面对作者自己时，审核中的评论会出现在这里）
+   *   3. 楼中楼端点 `/x/v2/reply/reply?root=<rpid>`：只要评论存在就返回 root（带 state）
+   * 只要存在就算「发出去了」；只有 `visible` 才代表公开评论区能看到。
+   */
+  async findOwnComment(
+    aid: number,
+    rpid: string,
+  ): Promise<Result<{ found: boolean; visible: boolean; state?: number; note?: string }>> {
+    for (const sort of [0, 1]) {
+      const res = await this.http.json<ReplyRaw>({
+        url: `${API}/x/v2/reply`,
+        query: { type: 1, oid: aid, sort, ps: 20, pn: 1 },
+        referer: REFERER_HOME,
+      });
+      if (!res.ok) {
+        if (res.error.kind === 'risk' || res.error.kind === 'auth') return res;
+        continue;
+      }
+      const replies = (Array.isArray(res.data?.replies) ? res.data.replies : []) as ReplyItemRaw[];
+      const hit = replies.find((reply) => String(reply?.rpid ?? '') === String(rpid));
+      if (hit) {
+        const state = typeof hit.state === 'number' ? hit.state : undefined;
+        return {
+          ok: true,
+          data: { found: true, visible: state === undefined || state === 0, ...(state !== undefined ? { state } : {}) },
+        };
+      }
+    }
+
+    const thread = await this.http.json<{ root?: ReplyItemRaw | null }>({
+      url: `${API}/x/v2/reply/reply`,
+      query: { type: 1, oid: aid, root: rpid, ps: 20, pn: 1 },
+      referer: REFERER_HOME,
+    });
+    if (!thread.ok) {
+      if (thread.error.kind === 'risk' || thread.error.kind === 'auth') return thread;
+      return { ok: true, data: { found: false, visible: false, note: `列表里没有，楼中楼也查不到：${thread.error.message}` } };
+    }
+    const root = thread.data?.root;
+    if (root && String(root.rpid ?? '') === String(rpid)) {
+      const state = typeof root.state === 'number' ? root.state : undefined;
+      return {
+        ok: true,
+        data: {
+          found: true,
+          visible: false,
+          ...(state !== undefined ? { state } : {}),
+          note: state === undefined ? '存在但不在公开列表里' : `存在但不在公开列表里（B站 state=${state}）`,
+        },
+      };
+    }
+    return { ok: true, data: { found: false, visible: false, note: '列表与楼中楼都没有这条 rpid' } };
+  }
+
   /** 复核楼中楼回复：在 root 的回复里找 parent 那条（内容也要对得上）。 */
   async findReply(aid: number, root: string, parent: string, expected?: string): Promise<Result<boolean>> {
     const thread = await this.threadReplies(aid, root);
@@ -572,6 +635,8 @@ interface ReplyThreadRaw {
 
 interface ReplyItemRaw {
   rpid?: unknown;
+  /** 0 = 正常显示；17 = 审核中/仅自己可见（真机上验到的）。 */
+  state?: number;
   parent?: unknown;
   root?: unknown;
   mid?: unknown;

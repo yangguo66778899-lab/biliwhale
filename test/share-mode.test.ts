@@ -107,7 +107,8 @@ function harness(options: { dryRunInConfig: boolean }): Harness {
 
   // 让「复核」通过（否则会变成 unverified，测试想验证的是「真发了」）
   const api = offline.api as unknown as { findComment: unknown };
-  api.findComment = async () => ({ ok: true, data: true });
+  const patchApi = api as unknown as { findOwnComment: unknown };
+  patchApi.findOwnComment = async () => ({ ok: true, data: { found: true, visible: true, state: 0 } });
 
   const deps: RoundDeps = {
     paths,

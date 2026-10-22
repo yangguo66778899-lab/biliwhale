@@ -27,7 +27,7 @@ import type { GateDecision } from './gate.ts';
 import { localIso } from '../shared/time.ts';
 import { humanError } from '../shared/errors.ts';
 
-export type ShareStatus = 'sent' | 'unverified' | 'failed' | 'denied' | 'dry_run';
+export type ShareStatus = 'sent' | 'held' | 'unverified' | 'failed' | 'denied' | 'dry_run';
 
 export interface ShareAttempt {
   bvid: string;
@@ -83,6 +83,8 @@ export interface ShareReport {
   denied: number;
   failed: number;
   unverified: number;
+  /** 发出去了、rpid 存在，但被 B 站挂起（公开区看不到）。 */
+  held: number;
   /** 是否因风控/鉴权中途停手。 */
   stopped: null | 'risk' | 'auth';
 }
@@ -136,7 +138,7 @@ export async function executeShares(deps: ShareDeps, input: ShareInput): Promise
   const cfg = deps.config;
   const attempts: ShareAttempt[] = [];
   const notes: string[] = [];
-  const report: ShareReport = { attempts, notes, sent: 0, dryRun: 0, denied: 0, failed: 0, unverified: 0, stopped: null };
+  const report: ShareReport = { attempts, notes, sent: 0, dryRun: 0, denied: 0, failed: 0, unverified: 0, held: 0, stopped: null };
 
   let riskStop = input.riskStop === true;
   let todayShares = input.todayShares;
@@ -317,11 +319,12 @@ export async function executeShares(deps: ShareDeps, input: ShareInput): Promise
     }
 
     // ---- 复核 ----
-    const verification = await verifyComment(deps, item.aid, outcome.rpid, content);
+    const verification = await verifyComment(deps, item.aid, outcome.rpid);
     attempt.rpid = outcome.rpid;
     attempt.verified = verification.ok;
-    attempt.status = verification.ok ? 'sent' : 'unverified';
+    attempt.status = verification.ok ? 'sent' : verification.held ? 'held' : 'unverified';
     if (verification.ok) report.sent += 1;
+    else if (verification.held) report.held += 1;
     else report.unverified += 1;
     todayShares += 1;
 
@@ -332,7 +335,7 @@ export async function executeShares(deps: ShareDeps, input: ShareInput): Promise
       aid: item.aid,
       target,
       share: true,
-      status: verification.ok ? 'sent' : 'unverified',
+      status: verification.ok ? 'sent' : verification.held ? 'held' : 'unverified',
       ...(outcome.rpid ? { rpid: outcome.rpid } : {}),
       note: key,
       content,
@@ -344,6 +347,16 @@ export async function executeShares(deps: ShareDeps, input: ShareInput): Promise
 
     if (verification.ok) {
       notes.push(`已发 ${item.bvid}${outcome.rpid ? `（rpid ${outcome.rpid}）` : '（没拿到 rpid）'}，复核通过`);
+    } else if (verification.held) {
+      notes.push(
+        `已发 ${item.bvid}（rpid ${outcome.rpid}），但 B 站把它挂起了：${verification.note ?? '公开区看不到'}` +
+          `——公开评论区看不到，主人可能收不到 @ 通知；不自动重发`,
+      );
+      deps.logger.event('share', '评论被 B 站挂起（已发出但公开区不可见）', {
+        level: 'warn',
+        target: 'share',
+        data: { bvid: item.bvid, rpid: outcome.rpid ?? null, state: verification.state ?? null },
+      });
     } else {
       notes.push(`已发 ${item.bvid} 但复核没通过（${verification.note ?? '列表里没找到'}）→ 标 unverified，不自动重发`);
       deps.logger.event('share', '复核未通过', { level: 'warn', target: 'share', data: { bvid: item.bvid, rpid: outcome.rpid ?? null } });
@@ -354,35 +367,56 @@ export async function executeShares(deps: ShareDeps, input: ShareInput): Promise
   return report;
 }
 
-/** 复核：最多 3 次、间隔递增；任意一次找到就算过。 */
+/**
+ * 复核：最多 3 次、间隔递增。
+ *
+ * 三种结论不能混为一谈（真机踩过：三条评论其实都发出去了，却被一律报「复核未通过」）：
+ *   - `visible`：公开评论区能看到 → 复核通过；
+ *   - `found` 但不可见：评论真实存在（rpid 查得到），只是 B 站挂起了（state=17 审核/仅自己可见）→ `held`；
+ *   - 完全查不到 → `unverified`（不自动重发）。
+ */
 async function verifyComment(
   deps: ShareDeps,
   aid: number,
   rpid: string | undefined,
-  content: string,
-): Promise<{ ok: boolean; attempts: number; note?: string }> {
-  if (!rpid) return { ok: false, attempts: 0, note: '没取到 rpid（绝不编）' };
+): Promise<{ ok: boolean; held: boolean; state?: number; attempts: number; note?: string }> {
+  if (!rpid) return { ok: false, held: false, attempts: 0, note: '没取到 rpid（绝不编）' };
   const delays = deps.verifyDelaysMs ?? DEFAULT_VERIFY_DELAYS;
   let attempts = 0;
+  let held = false;
+  let heldState: number | undefined;
   for (const delay of delays) {
     if (delay > 0 && !deps.skipWait) await sleep(delay);
     attempts += 1;
-    const found = await deps.api.findComment(aid, rpid);
+    const found = await deps.api.findOwnComment(aid, rpid);
     if (!found.ok) {
       if (found.error.kind === 'risk' || found.error.kind === 'auth') {
-        return { ok: false, attempts, note: `复核时撞到 ${found.error.kind}：${found.error.message}` };
+        return { ok: false, held: false, attempts, note: `复核时撞到 ${found.error.kind}：${found.error.message}` };
       }
       continue;
     }
-    if (found.data) return { ok: true, attempts };
+    if (found.data.visible) return { ok: true, held: false, attempts };
+    // 存在但不可见：先记下来，后面几次可能审核放行
+    if (found.data.found) {
+      held = true;
+      heldState = found.data.state;
+    }
   }
-  void content;
-  return { ok: false, attempts, note: '三次都没在最新评论里找到这条' };
+  if (held) {
+    return {
+      ok: false,
+      held: true,
+      ...(heldState !== undefined ? { state: heldState } : {}),
+      attempts,
+      note: heldState === undefined ? '评论存在但不在公开列表里' : `评论存在，但被 B 站挂起了（state=${heldState}）`,
+    };
+  }
+  return { ok: false, held: false, attempts, note: '三次都没在评论列表里找到这条' };
 }
 
 function countWritesToday(quota: QuotaLedger, now: Date): number {
   const date = localIso(now).slice(0, 10);
-  return quota.entries().filter((entry) => entry.at.slice(0, 10) === date && entry.status === 'sent').length;
+  return quota.entries().filter((entry) => entry.at.slice(0, 10) === date && (entry.status === 'sent' || entry.status === 'held')).length;
 }
 
 function sleep(ms: number): Promise<void> {

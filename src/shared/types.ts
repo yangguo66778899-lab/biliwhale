@@ -221,7 +221,8 @@ export interface QuotaEntry {
   target: string;
   rpid?: string;
   share: boolean;
-  status: 'sent' | 'failed' | 'unverified' | 'dry_run' | 'denied';
+  /** held = 发出去了、rpid 真实存在，但 B 站把它挂起了（审核/仅自己可见，公开区看不到）。 */
+  status: 'sent' | 'held' | 'failed' | 'unverified' | 'dry_run' | 'denied';
   /** 幂等键 sha256(bvid|action|target|contentHash)：M3 起用它判重。 */
   note?: string;
   /** 实际发送的内容（已按配置上限截断）。 */

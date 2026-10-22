@@ -33,7 +33,8 @@ interface Harness {
   quota: QuotaLedger;
   state: AppStateStore;
   dir: string;
-  found: { value: boolean };
+  /** value = 评论存在；visible = 公开列表能看到（false 表示被 B 站挂起）。 */
+  found: { value: boolean; visible: boolean };
   config: ConfigService;
 }
 
@@ -64,7 +65,7 @@ function harness(overrides: Record<string, unknown> = {}, opts: { shareEnabled?:
   const quota = QuotaLedger.open(paths.quota, logger);
   const transport = new FakeTransport();
   const writer = new BiliWriter({ http: transport, csrf: () => 'd'.repeat(32), logger, skipThrottle: true });
-  const found = { value: true };
+  const found = { value: true, visible: true };
 
   const deps: ShareDeps = {
     logger,
@@ -74,6 +75,10 @@ function harness(overrides: Record<string, unknown> = {}, opts: { shareEnabled?:
     config: cfg,
     api: {
       findComment: async () => ({ ok: true, data: found.value }),
+      findOwnComment: async () => ({
+        ok: true,
+        data: { found: found.value, visible: found.value && found.visible, state: found.value && found.visible ? 0 : 17 },
+      }),
       threadReplies: async () => ({ ok: true, data: { root: null, replies: [] } }),
       findReply: async () => ({ ok: true, data: found.value }),
     } as unknown as ShareDeps['api'],
@@ -247,6 +252,24 @@ test('复核失败：标 unverified、不自动重发、账本也记 unverified'
   const entry = h.quota.entries().at(-1);
   assert.equal(entry?.status, 'unverified');
   assert.equal(entry?.verifiedAt, undefined);
+});
+
+test('被 B 站挂起：评论真实存在但公开区看不到 → 标 held（不是 unverified），不重发', async () => {
+  const h = harness();
+  h.found.visible = false; // 存在、但 visible=false（state=17 审核中）
+  const report = await executeShares(h.deps, { items: [ITEM], todayShares: 0, silenceCap: 3, dryRun: false });
+
+  assert.equal(report.held, 1, '要单独算「挂起」');
+  assert.equal(report.unverified, 0, '不能混成「复核未通过」');
+  assert.equal(report.sent, 0);
+  assert.equal(h.transport.calls.length, 1, '绝不自动重发');
+  assert.equal(report.attempts[0]?.status, 'held');
+
+  const entry = h.quota.entries().at(-1);
+  assert.equal(entry?.status, 'held');
+  assert.match(entry?.error ?? '', /挂起|state=17/);
+  assert.equal(h.quota.sharesOn(entry.at.slice(0, 10)), 1, 'held 也要占分享额度（评论真实存在）');
+  assert.ok(report.notes.some((line) => line.includes('挂起') && line.includes('主人可能收不到')), report.notes.join('\\n'));
 });
 
 test('撞风控：立即停手、设冷却、后续条目不再发', async () => {

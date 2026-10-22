@@ -26,7 +26,7 @@ export interface VideoMeta {
 
 /** 报告里只需要这几项（避免把执行器类型泄漏进 writers）。 */
 export interface ShareAttemptView {
-  status: 'sent' | 'unverified' | 'failed' | 'denied' | 'dry_run';
+  status: 'sent' | 'held' | 'unverified' | 'failed' | 'denied' | 'dry_run';
   content: string;
   rpid?: string;
   verified?: boolean;
@@ -207,7 +207,7 @@ function renderShareAttempt(lines: string[], attempt: ShareAttemptView): void {
       lines.push(`- 没发：${attempt.deny.join('；') || '闸门没过'}`);
       break;
   }
-  if (attempt.status === 'sent' || attempt.status === 'unverified' || attempt.status === 'dry_run') {
+  if (attempt.status === 'sent' || attempt.status === 'held' || attempt.status === 'unverified' || attempt.status === 'dry_run') {
     lines.push(`- 文案：${attempt.content}`);
   }
 }

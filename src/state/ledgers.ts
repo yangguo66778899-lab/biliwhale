@@ -137,7 +137,7 @@ export class QuotaLedger {
         (e) =>
           e.at.slice(0, 10) === dateLocal &&
           e.share &&
-          e.status === 'sent' &&
+          (e.status === 'sent' || e.status === 'held') &&
           SHARE_TYPES.includes(e.type) &&
           (type === 'all' || e.type === 'dm'),
       ).length;
@@ -154,7 +154,7 @@ export class QuotaLedger {
       .log.filter(
         (e) =>
           e.bvid === bvid &&
-          e.status === 'sent' &&
+          (e.status === 'sent' || e.status === 'held') &&
           (type === 'all' ? true : e.share && SHARE_TYPES.includes(e.type)),
       )
       .sort((a, b) => b.at.localeCompare(a.at));
@@ -171,7 +171,8 @@ export class QuotaLedger {
 
   /** 幂等键查重：同样内容成功发过就不许再发。 */
   hasSentContent(key: string): boolean {
-    return this.store.get().log.some((e) => e.status === 'sent' && e.note === key);
+    // held 也算已发：评论真实存在（只是公开区看不到），不能再发一遍
+    return this.store.get().log.some((e) => (e.status === 'sent' || e.status === 'held') && e.note === key);
   }
 
   prune(beforeIso: string): number {

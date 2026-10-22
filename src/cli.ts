@@ -45,7 +45,7 @@ interface ParsedArgs {
   trigger: RunTrigger;
 }
 
-const VERSION = '0.6.0-M4';
+const VERSION = '0.6.1-M4';
 
 function parseArgs(argv: string[]): ParsedArgs {
   const args: ParsedArgs = {
