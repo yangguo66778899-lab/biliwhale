@@ -248,13 +248,14 @@ export class BiliApi implements WbiProvider {
 
   /**
    * 播放地址：`fnval=1` 要传统的 durl（一路 mp4/flv），`qn=16` 是 360P——抽帧够用、也省流量。
+   * `platform=pc` + `high_quality=1` 按接口规格文档给的组合（§bili-readonly-api-spec「播放直链」）。
    * 必须签名 + 带 cookie（匿名通常拿不到）。
    */
   async playUrl(bvid: string, cid: number, qn = 16): Promise<Result<PlayUrlInfo>> {
     if (!cid) return { ok: false, error: { kind: 'parse', code: 'parse', message: '没有 cid，取不到播放地址' } };
     const res = await this.http.json<PlayUrlRaw>({
       url: `${API}/x/player/wbi/playurl`,
-      query: { bvid, cid, qn, fnval: 1, fnver: 0, fourk: 0 },
+      query: { bvid, cid, qn, fnval: 1, fnver: 0, fourk: 0, platform: 'pc', high_quality: 1 },
       referer: `${REFERER_VIDEO}${bvid}/`,
       sign: true,
     });

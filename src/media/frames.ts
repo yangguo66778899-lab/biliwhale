@@ -342,7 +342,8 @@ function friendlyFfmpegError(err: unknown, stderr: string): Error {
 async function defaultDownload(url: string, dest: string, timeoutMs: number): Promise<void> {
   ensureDir(path.dirname(dest));
   const res = await fetch(url, {
-    headers: { 'user-agent': DEFAULT_UA, referer: 'https://www.bilibili.com/' },
+    // 直链按接口规格文档的写法带 UA + Referer + range（有些 CDN 不带 range 会给整段重定向）
+    headers: { 'user-agent': DEFAULT_UA, referer: 'https://www.bilibili.com/', range: 'bytes=0-' },
     signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
