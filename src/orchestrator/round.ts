@@ -52,6 +52,7 @@ import { likeVideo } from './like.ts';
 import { buildDeepPrompt, buildScreenPrompt, clip, pickDeepReads } from './prompts.ts';
 import { appendNotifyLog, writeArchive, writeDiary, writeReport, videoUrl, skipReasonText } from './writers.ts';
 import { dispatchNotifications } from '../notify/index.ts';
+import { buildWhyNot } from './whynot.ts';
 import { buildSystemMessage, buildUserPreamble, loadPromptAssets } from '../agent/prompts.ts';
 import type { PromptStatus } from '../agent/prompts.ts';
 import { extractJson as extractJsonFromModule, fallbackRoundResult, validateRoundResult, validateScreenResult } from '../agent/output.ts';
@@ -641,9 +642,16 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
 
   // ---------------------------------------------------------------- Phase 8 落盘
   const phase8 = Date.now();
+  const whyNot = buildWhyNot({
+    config: cfg,
+    result,
+    dmChannelOn: (cfg.notify.channels ?? []).some((channel) => channel.type === 'dm' && channel.enabled),
+    dryRun: effectiveDryRun,
+  });
   const reportPath = writeReport(deps.paths, {
     date,
     roundLabel: roundLabel(startedAt),
+    whyNot,
     level: cfg.report.level,
     result,
     counts,

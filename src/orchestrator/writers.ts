@@ -47,6 +47,8 @@ export interface ReportInput {
   usage: { promptTokens: number; completionTokens: number; costCny: number };
   dryRun: boolean;
   notes: string[];
+  /** 「今天为什么没做」（由 orchestrator/whynot.ts 生成，一行一条）。 */
+  whyNot?: Array<{ label: string; text: string }>;
 }
 
 export function videoUrl(bvid: string): string {
@@ -83,6 +85,13 @@ export function buildReportSection(input: ReportInput): string {
   const head = `> 看了 ${counts.screened} 条，深读 ${counts.deepRead} 条，挑中 ${counts.selected} 条，分享 ${counts.shared} 条${input.dryRun ? '（预演，未真的发）' : ''}；本轮 ${formatTokens(input.usage.promptTokens + input.usage.completionTokens)} token。`;
   lines.push(head);
   lines.push('');
+
+  // 用户最常问的「收藏不是开着吗，怎么没收藏」：两种档位都要写，不用去翻执行日志
+  if (input.whyNot && input.whyNot.length > 0) {
+    lines.push('### 今天为什么没做');
+    for (const line of input.whyNot) lines.push(`- ${line.label}：${line.text}`);
+    lines.push('');
+  }
 
   if (input.level === 'brief') {
     const lede = cleanProse(result.report_md, 400);

@@ -1,0 +1,50 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+
+import { buildWhyNot } from '../src/orchestrator/whynot.ts';
+import { validateConfig } from '../src/config/validate.ts';
+import type { Config } from '../src/config/spec.ts';
+
+function cfg(over: Record<string, unknown> = {}): Config {
+  const r = validateConfig({ fav: { enabled: true }, like: { enabled: false }, share: { enabled: false }, listen: { comment: { enabled: false } }, ...over });
+  assert.ok(r.ok, JSON.stringify(r.issues));
+  return r.value;
+}
+
+const emptyResult = { selected: [], favorite: null } as never;
+
+test('why-not：开关关着就说关着，不许含糊', () => {
+  const lines = buildWhyNot({ config: cfg(), result: emptyResult, dmChannelOn: false, dryRun: true });
+  const byLabel = new Map(lines.map((l) => [l.label, l.text]));
+  assert.match(byLabel.get('收藏') ?? '', /模型这一轮没提/);
+  assert.match(byLabel.get('点赞') ?? '', /开关关着/);
+  assert.match(byLabel.get('私信分享') ?? '', /分享开关关着/);
+  assert.match(byLabel.get('私信通知') ?? '', /渠道关着/);
+  assert.match(byLabel.get('评论监听') ?? '', /开关关着/);
+  assert.match(byLabel.get('动态') ?? '', /面板手动发/);
+});
+
+test('why-not：开了但模型没提 / 提了就写「会收藏哪个」', () => {
+  const noFav = buildWhyNot({ config: cfg(), result: emptyResult, dmChannelOn: true, dryRun: false });
+  assert.match(noFav.find((l) => l.label === '收藏')?.text ?? '', /模型这一轮没提/);
+
+  const withFav = buildWhyNot({
+    config: cfg(),
+    result: { selected: [{ bvid: 'BV1x', score: 15 }], favorite: { bvid: 'BV1x', reason: '说清了怎么搭流水线，以后还想翻' } } as never,
+    dmChannelOn: true,
+    dryRun: false,
+  });
+  const fav = withFav.find((l) => l.label === '收藏')?.text ?? '';
+  assert.match(fav, /会收藏 BV1x/);
+  assert.match(withFav.find((l) => l.label === '点赞')?.text ?? '', /开关关着/, '点赞默认关');
+});
+
+test('why-not：私信渠道设的是评论时，说清「不是私信」', () => {
+  const lines = buildWhyNot({
+    config: cfg({ share: { enabled: true, via: 'comment' } }),
+    result: emptyResult,
+    dmChannelOn: true,
+    dryRun: false,
+  });
+  assert.match(lines.find((l) => l.label === '私信分享')?.text ?? '', /不是私信/);
+});
