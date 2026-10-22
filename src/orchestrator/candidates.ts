@@ -32,8 +32,8 @@ export interface CollectOptions {
   now?: Date;
 }
 
-/** 最近 7 天看过的视频不再进候选（避免每天都推同一条）。 */
-const SEEN_DEDUPE_DAYS = 7;
+/** 判重冷藏天数默认值（可在设置里改；0 = 不去重）。 */
+const DEFAULT_SEEN_DEDUPE_DAYS = 7;
 
 export async function collectCandidates(opts: CollectOptions): Promise<CollectResult> {
   const { api, config, logger } = opts;
@@ -112,6 +112,8 @@ export async function collectCandidates(opts: CollectOptions): Promise<CollectRe
     merged.set(video.bvid, { ...prev, ...preferFilled(prev, video) });
   }
 
+  const dedupeDays = Math.max(0, Math.floor(config.content.seenDedupeDays ?? DEFAULT_SEEN_DEDUPE_DAYS));
+
   const excludeUp = new Set(config.content.excludeUp.map((s) => s.trim()).filter(Boolean));
   const includeUp = new Set(config.content.includeUp.map((s) => s.trim()).filter(Boolean));
 
@@ -131,7 +133,7 @@ export async function collectCandidates(opts: CollectOptions): Promise<CollectRe
         continue;
       }
     }
-    if (opts.seen.seenWithin(video.bvid, SEEN_DEDUPE_DAYS, now)) {
+    if (dedupeDays > 0 && opts.seen.seenWithin(video.bvid, dedupeDays, now)) {
       droppedBySeen += 1;
       continue;
     }
@@ -145,7 +147,7 @@ export async function collectCandidates(opts: CollectOptions): Promise<CollectRe
 
   if (droppedByDuration > 0) notes.push(`按时长过滤掉 ${droppedByDuration} 条`);
   if (droppedByUp > 0) notes.push(`按屏蔽 UP 过滤掉 ${droppedByUp} 条`);
-  if (droppedBySeen > 0) notes.push(`最近 ${SEEN_DEDUPE_DAYS} 天看过，去重掉 ${droppedBySeen} 条`);
+  if (droppedBySeen > 0) notes.push(`最近 ${dedupeDays} 天看过，去重掉 ${droppedBySeen} 条`);
 
   // 排序：优先 UP > 偏好关键词命中 > 评论热度 > 新鲜度
   const scored = filtered.map((candidate) => ({ candidate, rank: rankScore(candidate, config, includeUp) }));

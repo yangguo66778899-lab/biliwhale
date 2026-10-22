@@ -587,15 +587,19 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
     });
   }
 
-  // 判重账本：看过的都记（下一轮不再推同一条）
+  // 判重账本：只记「真的送进初筛」的（含挑中的）。
+  // 候选里排在 screenLimit 之后、从没给模型看过的那些不记 —— 否则一轮就把当天库存冷藏 7 天，
+  // 后面几轮只剩个位数候选（真机上「两轮都只有 1 条候选」就是这个原因）。
+  const screenedBvids = new Set(screen.items.map((item) => item.bvid));
   for (const candidate of collected.candidates) {
+    if (!screenedBvids.has(candidate.video.bvid)) continue;
     const selected = result.selected.find((s) => s.bvid === candidate.video.bvid);
     const skipped = result.skipped.find((s) => s.bvid === candidate.video.bvid);
     deps.seen.record({
       bvid: candidate.video.bvid,
       title: candidate.video.title,
       decision: selected ? 'selected' : 'skipped',
-      reason: selected ? `挑中 ${selected.score}/20` : skipped ? skipReasonText(skipped.reason) : '未进深读',
+      reason: selected ? `挑中 ${selected.score}/20` : skipped ? skipReasonText(skipped.reason) : '初筛未进深读',
       now: now(),
     });
   }

@@ -230,6 +230,15 @@ export const SPEC = {
         screenLimit: { kind: 'number', label: '送初筛条数', default: 10, min: 1, max: 50, int: true },
         deepReadLimit: { kind: 'number', label: '深读条数', default: 3, min: 1, max: 10, int: true },
         searchDays: { kind: 'number', label: '只搜最近几天', default: 7, min: 1, max: 30, int: true },
+        seenDedupeDays: {
+          kind: 'number',
+          label: '判重冷藏天数',
+          desc: '同一条视频这么多天内不再进候选；0 = 不按看过去重（每轮可能重复推荐同一批）',
+          default: 7,
+          min: 0,
+          max: 90,
+          int: true,
+        },
         minDuration: { kind: 'number', label: '最短时长（秒）', default: 0, min: 0, max: 7200, int: true },
         maxDuration: { kind: 'number', label: '最长时长（秒）', default: 7200, min: 0, max: 36000, int: true },
         sources: {
@@ -238,7 +247,7 @@ export const SPEC = {
           fields: {
             search: { kind: 'boolean', label: '关键词搜索', default: true },
             hot: { kind: 'boolean', label: '热门', default: true },
-            ranking: { kind: 'boolean', label: '排行', default: false },
+            ranking: { kind: 'boolean', label: '排行', default: true },
             following: { kind: 'boolean', label: '关注动态', default: true },
             favorites: { kind: 'boolean', label: '收藏夹', default: false },
           },
