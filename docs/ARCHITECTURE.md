@@ -169,6 +169,9 @@ Phase 10 收尾     token 记账 / run 记录 / 事件    → state.noteRun + ad
 32. **候选不够就翻页，翻完要明说**：`candidates.ts` 每取完一页就重新过一遍「合并/去重/过滤」，
     `filtered < candidateLimit` 时继续翻（`content.candidatePages`，默认 3，上限 5）；某页没带来任何新 bvid 就停；
     候选少于 `screenLimit` 时必须在 notes 里写清楚，**不许静默变少**（真机「27 → 17 → 8」就是第 1 页被挖穿 + 没人吭声）。
+33. **预演只有一个来源**：`runRound` 开头的 `effectiveDryRun = options.dryRun || cfg.safety.dryRun` 是唯一判据；
+    提示词状态、报告措辞、run 记录、分享/收藏/点赞/私信都必须用它。`round.ts` 与 `daemon/runner.ts` 里**不许**写死 `dryRun: true`
+    （有不变式测试扫源码；真机上「报告总说预演、模型总说只读预演、定时那一轮从不真发」就是这么来的）。
 
 ## 想加东西时改哪里
 

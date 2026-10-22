@@ -27,7 +27,9 @@ export async function runSkipRound(deps: RoundDeps, input: SkipRoundInput): Prom
   const date = localDate(now);
   const label = `${formatHhmm(now.getHours() * 60 + now.getMinutes())} · 醒来但不想看`;
   const cfg = deps.config.get();
-  const record = deps.runs.start({ trigger: input.trigger, dryRun: true, configuredModel: deps.llm.model });
+  // 跳过分支本来就不写任何远端内容；这里的 dryRun 只影响报告措辞，按真实配置报，别误导。
+  const dryRun = cfg.safety.dryRun;
+  const record = deps.runs.start({ trigger: input.trigger, dryRun, configuredModel: deps.llm.model });
 
   const written = await writeSkipDiaries(deps, { date, label, reason: input.reason, now });
   const usage = written.usage;
@@ -53,7 +55,7 @@ export async function runSkipRound(deps: RoundDeps, input: SkipRoundInput): Prom
       videos: new Map(),
       shareDecisions: new Map(),
       usage: { promptTokens: usage.promptTokens, completionTokens: usage.completionTokens, costCny: 0 },
-      dryRun: true,
+      dryRun,
       notes: [input.reason, '今天没取候选、没分享（跳过分支）'],
     });
     appendNotifyLog(deps.paths, written.notify);

@@ -102,6 +102,10 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
   const startedAt = now();
   const date = localDate(startedAt);
   const cfg = deps.config.get();
+  // 「这一轮到底是不是预演」只算一次：手动预演（--dry / 面板「预演一轮」）或配置里的「一律预演」，
+  // 两者任一为真就不真发。**提示词、报告、run 记录都必须用这同一个值**——
+  // 曾经这里写死过 true（M0 遗留），结果真跑时报告也标「预演，未真的发」，模型还被提示按预演写文案。
+  const effectiveDryRun = options.dryRun || cfg.safety.dryRun;
   const phases: PhaseRecord[] = [];
   const errors: string[] = [];
   const notes: string[] = [];
@@ -109,7 +113,7 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
 
   let record = deps.runs.start({
     trigger: options.trigger,
-    dryRun: options.dryRun,
+    dryRun: effectiveDryRun,
     configuredModel: deps.configuredModel ?? deps.llm.model,
   });
   const counts: RunCounts = { candidates: 0, screened: 0, deepRead: 0, selected: 0, shared: 0, skippedNoSubtitle: 0 };
@@ -235,7 +239,7 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
     silence: silence.text,
     channels: cfg.share.enabled ? cfg.share.via : '都没开（只写报告与日记）',
     budget: `本轮 ${cfg.llm.runBudgetTokens} token`,
-    dryRun: options.dryRun || true, // M0 永远是只读
+    dryRun: effectiveDryRun,
   };
   const memoryLines = buildMemoryLines(deps, silence.text);
   const systemMessage = buildSystemMessage(assets);
@@ -267,7 +271,7 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
   if (collected.candidates.length === 0) {
     const reason = collected.errors.length > 0 ? `候选一个都没取到：${collected.errors.join('；')}` : '今天没有合适的候选';
     notes.push(reason);
-    writeEmptyRoundOutputs(deps, { date, label: roundLabel(startedAt), reason, trigger: options.trigger, cfg });
+    writeEmptyRoundOutputs(deps, { date, label: roundLabel(startedAt), reason, trigger: options.trigger, cfg, dryRun: effectiveDryRun });
     appendNotifyLog(deps.paths, `今天没挑出什么。${reason}`);
     return finish(collected.errors.length > 0 ? 'degraded' : 'ok');
   }
@@ -294,6 +298,7 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
       reason: '轻读阶段所有候选都读不到内容',
       trigger: options.trigger,
       cfg,
+      dryRun: effectiveDryRun,
     });
     return finish('degraded');
   }
@@ -402,7 +407,7 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
 
   if (deepReads.length === 0) {
     errors.push('深读阶段一条也没读到');
-    writeEmptyRoundOutputs(deps, { date, label: roundLabel(startedAt), reason: '深读阶段一条也没读到', trigger: options.trigger, cfg });
+    writeEmptyRoundOutputs(deps, { date, label: roundLabel(startedAt), reason: '深读阶段一条也没读到', trigger: options.trigger, cfg, dryRun: effectiveDryRun });
     return finish('degraded');
   }
 
@@ -472,8 +477,6 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
 
   // ---------------------------------------------------------------- 闸门 + 执行分享（M3）
   // 判定与执行是同一段：闸门说「不发」就一条都不发；说「发」才走写层。
-  // dryRun 由「本次手动预演」或「配置里一律预演」共同决定，两者任一为真都不真发。
-  const effectiveDryRun = options.dryRun || cfg.safety.dryRun;
   const shareReport = await executeShares(
     {
       logger,
@@ -636,7 +639,7 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
     shareDecisions,
     shareAttempts: new Map(shareReport.attempts.map((attempt) => [attempt.bvid, attempt])),
     usage: { promptTokens: usage.promptTokens, completionTokens: usage.completionTokens, costCny: 0 },
-    dryRun: true,
+    dryRun: effectiveDryRun,
     notes,
   });
   if (reportPath) logger.info('orchestrator', `报告已写入 ${reportPath}`);
@@ -898,7 +901,7 @@ function writeFailureOutputs(deps: RoundDeps, input: { date: string; label: stri
 /** 没有候选 / 没有深读材料时也一样要写日记（日记不可关）。 */
 function writeEmptyRoundOutputs(
   deps: RoundDeps,
-  input: { date: string; label: string; reason: string; trigger: RunTrigger; cfg: Config },
+  input: { date: string; label: string; reason: string; trigger: RunTrigger; cfg: Config; dryRun: boolean },
 ): void {
   try {
     writeReport(deps.paths, {
@@ -919,7 +922,7 @@ function writeEmptyRoundOutputs(
       videos: new Map(),
       shareDecisions: new Map(),
       usage: { promptTokens: 0, completionTokens: 0, costCny: 0 },
-      dryRun: true,
+      dryRun: input.dryRun,
       notes: [input.reason],
     });
     writeDiary(deps.paths, {

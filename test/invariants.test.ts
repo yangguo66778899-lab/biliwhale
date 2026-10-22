@@ -246,6 +246,26 @@ test('面板（M2）：静态资源在仓库里、离线可用、不引外链、
   }
 });
 
+test('预演模式只有一个来源：round 与定时触发里不许写死 dryRun: true', () => {
+  // 真机反馈：打开了分享开关、关掉了「一律预演」，报告却仍写「（预演，未真的发）」，
+  // 模型也被提示成「只读预演」。根因是 round.ts 里三处写死的 dryRun: true（M0 遗留），
+  // 以及 runner.ts 定时触发恒传 true。这里按文件禁掉这种写法。
+  const forbidden = [
+    path.join(SRC, 'orchestrator', 'round.ts'),
+    path.join(SRC, 'daemon', 'runner.ts'),
+  ];
+  for (const file of forbidden) {
+    const text = fs.readFileSync(file, 'utf8');
+    const lines = text.split('\n');
+    const hits = lines
+      .map((line, index) => ({ line: index + 1, text: line.trim() }))
+      .filter((item) => /dryRun:\s*true\b/.test(item.text) && !item.text.startsWith('//') && !item.text.startsWith('*'));
+    assert.deepEqual(hits, [], `${path.relative(ROOT, file)} 里不许写死 dryRun: true（用 effectiveDryRun / 配置值）：${JSON.stringify(hits)}`);
+  }
+
+  // 真跑/预演两条路径都要有测试钉住（share-mode.test.ts）
+  assert.ok(fs.existsSync(path.join(ROOT, 'test', 'share-mode.test.ts')), '缺「真跑 vs 预演」的回归测试');
+});
 test('QR 编码器不引入任何第三方依赖（自己实现，外部参照对拍过）', () => {
   const text = fs.readFileSync(path.join(SRC, 'qr', 'encoder.ts'), 'utf8');
   assert.equal(/from '[^.]/.test(text), false, 'src/qr 只允许相对导入');

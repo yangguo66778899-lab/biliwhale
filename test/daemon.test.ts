@@ -49,9 +49,11 @@ test('到点自己醒：初始 tick 真的跑完一轮，并把报告/日记落�
     const runsDir = path.join(dir, 'runs');
     const runs = fs.readdirSync(runsDir).filter((file) => file.endsWith('.json'));
     assert.equal(runs.length, 1);
-    const record = JSON.parse(fs.readFileSync(path.join(runsDir, runs[0] as string), 'utf8')) as { trigger: string; status: string };
+    const record = JSON.parse(fs.readFileSync(path.join(runsDir, runs[0] as string), 'utf8')) as { trigger: string; status: string; dryRun: boolean };
     assert.equal(record.trigger, 'schedule', '这一轮是作息触发的');
     assert.equal(record.status, 'ok');
+    // 回归：定时触发曾经恒传 dryRun=true（M1 遗留），导致「到点自己醒」永远只预演、从不真发
+    assert.equal(record.dryRun, false, '定时触发的这一轮不该被标成预演（配置里没开「一律预演」）');
 
     const day = localDate();
     assert.ok(fs.existsSync(path.join(dir, 'reports', `${day}.md`)), '日报要落盘');

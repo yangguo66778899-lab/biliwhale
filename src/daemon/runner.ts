@@ -86,7 +86,9 @@ export class RoundRunner {
     const task =
       slot.kind === 'skip'
         ? runSkipRound(this.deps(), { trigger: 'schedule', reason: '今天不想看（作息计划里的跳过）' })
-        : runRound(this.deps(), { trigger: 'schedule', dryRun: true });
+        : // 定时触发也要按配置决定真发/预演（`safety.dryRun` 在 runRound 里统一算）。
+          // 曾经这里写死 true（M1 时代还没有写能力），导致「到点自己醒」的那一轮永远只预演。
+          runRound(this.deps(), { trigger: 'schedule', dryRun: false });
     return this.track(task, `定时触发（${slot.atText}）`);
   }
 
