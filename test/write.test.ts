@@ -157,3 +157,37 @@ test('字数按码点算（emoji 算一个）', () => {
   assert.equal(countChars('鲸鱼'), 2);
   assert.equal(countChars('🐳ya'), 3);
 });
+
+test('发动态：dry-run 只出 plan；真发是 POST + csrf + dyn_req（面板入口靠它）', async () => {
+  const csrf = '0123456789abcdef0123456789abcdef';
+  const { writer, transport } = makeWriter(csrf);
+
+  const dry = await writer.postDynamic({ text: '今天看了两条，都不长' }, { dryRun: true });
+  assert.equal(dry.ok, true);
+  assert.equal(dry.dryRun, true);
+  assert.equal(transport.calls.length, 0, '预演不许真的发');
+  assert.match(dry.plan.summary, /2 条|一条动态/);
+
+  const real = await writer.postDynamic({ text: '今天看了两条，都不长' }, { dryRun: false });
+  assert.equal(real.ok, true);
+  assert.equal(transport.calls.length, 1);
+  const call = transport.calls[0];
+  assert.equal(call?.method, 'POST');
+  assert.match(String(call?.url), /\/x\/dynamic\/feed\/create\/dyn$/);
+  assert.equal(call?.form?.csrf, csrf, '要带真 csrf');
+  const dynReq = JSON.parse(String(call?.form?.dyn_req ?? '{}')) as {
+    content?: { contents?: Array<{ raw_text?: string; type?: number }> };
+    scene?: number;
+  };
+  assert.equal(dynReq.content?.contents?.[0]?.raw_text, '今天看了两条，都不长');
+  assert.equal(dynReq.content?.contents?.[0]?.type, 1);
+  assert.equal(dynReq.scene, 1);
+});
+
+test('发动态：没有 csrf 直接拒绝，不发请求', async () => {
+  const { writer, transport } = makeWriter('');
+  const outcome = await writer.postDynamic({ text: 'x' }, { dryRun: false });
+  assert.equal(outcome.ok, false);
+  assert.equal(transport.calls.length, 0);
+  assert.match(outcome.error?.message ?? '', /csrf|bili_jct/i);
+});
