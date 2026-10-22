@@ -97,9 +97,9 @@ shell\BiliWhaleTray.exe
 node src/cli.ts run --now --dry
 
 # 6) 验证
-npm test              # 302 个用例：写层/闸门/幂等/审批/收藏/私信/聊天/监听/面板/登录/二维码/调度/守护进程/离线整轮
-npm run m0:offline    # 夹具整轮：不联网、不需要凭据
-npm run m0:live-read  # 真实 B 站数据 + 占位模型（不代表模型质量）
+npm test              # 344 个用例：写层/闸门/幂等/审批/收藏/私信/聊天/监听/面板/登录/二维码/调度/守护进程/离线整轮/看画面
+npm run offline       # 夹具整轮：不联网、不需要凭据
+npm run live-read     # 真实 B 站数据 + 占位模型（不代表模型质量）
 npm run smoke:bili    # 真 B 站只读冒烟：WBI / 搜索 / 视频 / 评论 / 字幕轨
 ```
 
@@ -110,7 +110,7 @@ npm run smoke:bili    # 真 B 站只读冒烟：WBI / 搜索 / 视频 / 评论 /
 | 页 | 内容 |
 |---|---|
 | 概览 | 状态、下一次唤醒、今日额度与花费、最近一轮；预演 / 跑一轮 / 暂停恢复；体检表 |
-| 设置 | 20 组、96 个字段，全部来自 `config/spec.ts` 的元数据；保存即生效，可校验、导出、导入、恢复默认 |
+| 设置 | 全部配置项——分组与字段由 `config/spec.ts` 自动生成（加一项只改 schema）；保存即生效，可校验、导出、导入、恢复默认 |
 | 账号 | 扫码登录（二维码 + 2 秒轮询）、cookie 粘贴、复核、退出（只清本机）、UID 与凭据指纹 |
 | 报告 / 日记 | 按日期列表 + Markdown 预览（日记分「给你看的」「给自己看的」两本，可按内容搜索） |
 | 待审 | 陌生人回复的草稿：谁、原话、拟回复；「发 / 预演 / 不发」，可手动「扫描新回复」 |
@@ -222,7 +222,7 @@ shell/BiliWhaleTray.cs  # C# 5 托盘（源码入库，exe 由 npm run tray:buil
 scripts/                # smoke-bili.ts（只读冒烟）、smoke-panel/m3/m4.mts、build-tray.ps1
                         # pack.mts（打便携包）、bench.mts（性能）、soak.mts（7 天浸泡）
 packaging/              # 便携包里的安装/卸载/启动脚本模板（install.ps1 等，带 BOM）
-test/                   # 单元 + 集成（302 个用例，含二维码对拍与面板渲染）
+test/                   # 单元 + 集成（344 个用例，含二维码对拍、面板渲染与"看画面"抽帧）
 fixtures/               # 离线夹具（B 站响应、模型输出）
 docs/                   # 架构说明、B 站接口规格、M0–M5 验收记录、用户手册
 ```

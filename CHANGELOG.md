@@ -526,7 +526,7 @@ P0 收尾两项 + §7.10「看画面」。`npm test` **318 → 344**。
 ### 新增
 
   **本地 Web 面板（`src/ui/`，原生 JS，无构建、无 CDN）**：概览（状态/下一次/额度/最近一轮/花费 + 跑一轮·预演·暂停）、
-  设置（20 组 / 96 个字段，全部由 `config/spec.ts` 的元数据渲染，加字段只改 schema）、账号（扫码 / cookie 粘贴 / 复核 / 退出）、
+  设置（全部字段由 `config/spec.ts` 的元数据渲染，加字段只改 schema）、账号（扫码 / cookie 粘贴 / 复核 / 退出）、
   报告与日记（列表 + Markdown 预览 + 日记全文搜索）、日志（级别过滤 + 下载诊断包）、关于（版本/数据目录/模型/今日预算）。
   哈希路由、无内联脚本（CSP `script src 'self'`）、外链为零。
   **设置即生效**：`GET/PUT /api/config`、`POST /api/config/validate|import|reset`、`GET /api/config/export`。

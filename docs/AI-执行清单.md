@@ -15,7 +15,7 @@
 | 版本 | `package.json` `0.7.1`；`src/cli.ts` `VERSION = '0.7.1'` |
 | 运行时 | Node 24（strip-only TS，`.ts` 直接跑）；**零运行时依赖**；devDeps 仅 typescript + @types/node |
 | 校验命令 | `npx tsc --noEmit`（必须无输出） |
-| 测试 | `npm test` → **312 个用例，0 失败**（Node test runner，`--test-isolation=none`） |
+| 测试 | `npm test` → **344 个用例，0 失败**（Node test runner，`--test-isolation=none`） |
 | 离线整轮 | `npm run offline`（= `run --now --dry --fixtures --data-dir .run/offline`） |
 | 打包 | `npm run pack` → `dist/BiliWhale-<版本>/` + `-portable.zip` |
 | 安装演练 | `npm run rehearse`（13 项断言，不需要虚拟机） |
@@ -530,6 +530,7 @@ npm run pack                                 # 动过 packaging/ 或要发版时
 | 日期 | 版本 | 改了什么 | 谁 |
 |---|---|---|---|
 | 2026-10-22 | v1 草案 | 初稿：P0 五项、P1 文案+视觉、P2 双击即用（A）、P3 提示词 | AI（待用户确认） |
+| 2026-10-22 | v1.7 | 完成 **P0-5**（P0 六项到此全部完成）：`docs/审计处理记录.md` 三张表逐条加「状态」列并按 §2 的五个值统计（合计 103：已修 **45** / 暂缓(P0外) **40** / 待拍板 **7** / 待真机 **8** / 不改 **3**），顶部计数、分桶、§5/§6 全部改成实际值；README / CHANGELOG / 需求文档 §15 / 用户手册 / ARCHITECTURE / M2 验收记录 的用例数统一为 **344**、删掉「96 个字段」这类会漂移的硬数字（改成「由 `config/spec.ts` 自动生成」）；顺手修掉 README 里过时的 `npm run m0:offline`（应为 `offline`/`live-read`） | AI |
 | 2026-10-22 | v1.6 | 完成 **§7.10 看画面**（`media.frames` 默认关）：`x/player/wbi/playurl` 取低清 → ffmpeg 抽 9 帧拼 3×3 + 无字幕轨时裁下方拼「字幕条」→ `LlmClient` 加 `image_url` 内容块（只进 user 消息）→ 报告写「看了画面 / 没看（原因）」；超时 `120s + 时长×1.5`、缓存限量、视频用完即删、图片不进报告/日志/诊断包；`§7.9` 的「没有画面工具」按新能力更正；`§9` 的「不实现抽帧」改为「看画面以外不做多模态」；用例 327 → 344 | AI |
 | 2026-10-22 | v1.5 | 完成 **P0-2**（通知只露「B 站私信 / 本机日志」、其余折进「高级」、每渠道「发条测试」、枚举与说明中文化）与 **P0-3**（概览/报告页「发动态…」弹确认框可编辑；账本「删除…」必须输入「删除」；`/api/notify/test`、`/api/dynamic`、`/api/picked` 就位，服务端各再判一次）；用例 318 → 327 | AI |
 | 2026-10-22 | v1.4 | 更正 P0-1 的前提（DeepSeek Flash 支持图片 → 抽帧是对的）；P0-1 定性为「先止损、再补实现」；新增 §7.10 看画面实现规格（四件事 + 硬性约束 + 验收） | AI |
