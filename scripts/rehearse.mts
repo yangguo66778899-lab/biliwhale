@@ -26,9 +26,12 @@ if (!version) {
 const zipFile = path.join(ROOT, 'dist', `BiliWhale-${version}-portable.zip`);
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const tmp = path.join(ROOT, 'test', '.tmp', `rehearse-${stamp}`);
-const portable = path.join(tmp, 'portable');
-const installed = path.join(tmp, 'installed');
-const dataDir = path.join(tmp, 'data');
+// §6.3 的验收条件之一：「把整包解压到含空格和中文的路径」也要能装能跑。
+// 所以这里**故意**用这种目录名；如果哪里少加了引号，这一步就会挂。
+const workDir = path.join(tmp, '含空格 的 目录');
+const portable = path.join(workDir, 'portable');
+const installed = path.join(workDir, 'installed');
+const dataDir = path.join(workDir, 'data');
 
 const checks: Array<{ name: string; ok: boolean; detail: string }> = [];
 const check = (name: string, ok: boolean, detail = ''): void => {
@@ -68,6 +71,7 @@ for (const entry of entries) {
 check('解压便携包', extracted > 100, `${extracted} 个文件，从 ${(fs.statSync(zipFile).size / 1024 / 1024).toFixed(1)} MB 的 zip`);
 check('包里有 node.exe', fs.existsSync(path.join(portable, 'runtime', 'node.exe')));
 check('包里有托盘 exe', fs.existsSync(path.join(portable, 'app', 'shell', 'BiliWhaleTray.exe')));
+check('路径含空格与中文（§6.3）', workDir.includes(' ') && /[\u4e00-\u9fa5]/.test(workDir), workDir);
 
 // 2) 安装（-NoRegister：只复制文件）
 const installStarted = Date.now();

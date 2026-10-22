@@ -22,12 +22,17 @@ M5 把它做成能装的东西：便携包自带 Node、免管理员安装/卸�
 解压后双击 `install.cmd` 装到 `%LOCALAPPDATA%\Programs\BiliWhale`，或直接双击 `BiliWhale.cmd` 便携运行。
 卸载 `uninstall.cmd`（默认保留数据）。详见 [`docs/用户手册.md`](./docs/用户手册.md)。
 
+**双击即用**：装好后从开始菜单/桌面双击图标 → 托盘起来 → 内核没起会自己拉起 → 出现一个**没有地址栏、没有标签页**的面板窗口
+（用系统 Edge 的 `--app` 模式，1200×820；没装 Edge 就退回默认浏览器，不报错、不弹命令行）。
+**关掉窗口 ≠ 退出程序**：窗口是独立进程，关掉后托盘还在、到点照常醒；托盘右键「打开面板」或**再双击一次图标**，
+会把已经开着的窗口带到前面（第二次双击不会起第二个内核、也不会多一个托盘）。
+
 - 常驻跑起来：`npm run serve`（或 `node src/cli.ts serve`），它会打印面板地址（`http://127.0.0.1:<port>/?token=…`）
 - 面板：概览 / 设置 / 账号 / 报告 / 日记 / 待审 / **私聊** / 日志 / 关于；离线可用，不引 CDN
 - 体检：`node src/cli.ts doctor`（或面板「概览」）会列「首次配置清单」：Node / 数据目录 / DeepSeek key / 登录 / **主人 UID** / 主人昵称 / 磁盘，缺哪个一眼看到
-- 托盘：`npm run tray:build` → `shell\BiliWhaleTray.exe`，右键可「打开面板」「现在跑一轮」「暂停」
-- 离线验证（不联网、不花钱、不需要凭据）：`npm run m0:offline`
-- 真接口验证：`npm run smoke:bili`（只读）与 `npm run m0:live-read`（真 B 站数据 + 占位模型）
+- 托盘：`npm run tray:build` → `shell\BiliWhaleTray.exe`，右键可「打开面板」「现在跑一轮（预演）」「暂停/恢复」「开机自启」「打开数据目录」「退出」
+- 离线验证（不联网、不花钱、不需要凭据）：`npm run offline`
+- 真接口验证：`npm run smoke:bili`（只读）与 `npm run live-read`（真 B 站数据 + 占位模型）
 - 真实跑一轮：设 `BILIWHALE_API_KEY`（可选 `BILIWHALE_COOKIE`）后 `node src/cli.ts run --now --dry`
 - **想让它真的动起来**：面板「设置 → 分享」打开「允许对外分享」，并确认「安全 → 一律预演」是关的；
   先用「预演一轮」看文案与闸门结论，再让它真发。私聊/监听各有独立开关（「监听与回复」「通知」）。

@@ -45,8 +45,17 @@ namespace BiliWhaleTray
         private const string AppName = "BiliWhale";
         private const int PollMs = 15000;
 
+        // 单实例：第二个托盘不再弹一个图标，而是让在跑的那个把面板带到前面（§6.2）
+        private const string TrayMutexName = "Global\\BiliWhaleTray";
+        private const string TraySignalName = "Global\\BiliWhaleTrayOpenPanel";
+        private const string TrayMutexNameLocal = "Local\\BiliWhaleTray";
+        private const string TraySignalNameLocal = "Local\\BiliWhaleTrayOpenPanel";
+
         private static NotifyIcon icon;
         private static System.Windows.Forms.Timer pollTimer;
+        private static System.Windows.Forms.Timer signalTimer;
+        private static System.Threading.Mutex trayMutex;
+        private static System.Threading.EventWaitHandle openPanelSignal;
         private static MenuItem statusItem;
         private static MenuItem pauseItem;
         private static MenuItem autostartItem;
@@ -57,6 +66,7 @@ namespace BiliWhaleTray
         private static string dataDirArg;
         private static bool autostartMode;
         private static bool selfTest;
+        private static bool noOpen;
 
         private static string runtimeDirOverride;
         private static RuntimeInfo runtime;
@@ -71,23 +81,67 @@ namespace BiliWhaleTray
             ParseArgs(args);
             runtime = RuntimeLoader.Load(dataDirArg);
 
-            BuildTray();
-
+            // --selftest 不抢单实例：托盘正在跑的时候也要能自检
             if (selfTest)
             {
+                BuildTray();
                 RefreshHealth();
                 PrintSelfTest();
                 return;
             }
 
-            RefreshHealth();
-            if (autostartMode && !KernelUp()) AutoStartKernel();
+            // 第二次双击：让已经在跑的那个托盘去开面板，自己直接退出。
+            // （没有这一步就是两个托盘图标 + 两个窗口，用户会以为程序起了两份）
+            if (!TakeSingleInstance())
+            {
+                SignalExistingTray();
+                return;
+            }
+
+            BuildTray();
+
+            if (autostartMode || noOpen)
+            {
+                // 开机自启 / 调试：只出托盘，不弹窗、不抢焦点
+                RefreshHealth();
+                if (autostartMode && !KernelUp()) AutoStartKernel();
+            }
+            else
+            {
+                // 双击图标：内核没起就先起，起来了就把面板开出来（§6.1：3 秒内出窗口）
+                EnsureKernelThenOpenPanel();
+            }
+
             pollTimer = new System.Windows.Forms.Timer();
             pollTimer.Interval = PollMs;
             pollTimer.Tick += delegate { RefreshHealth(); };
             pollTimer.Start();
+            StartOpenPanelWatcher();
 
             Application.Run();
+        }
+
+        /**
+         * 双击启动这条路径：内核没起就先拉起来（最多等 8 秒），然后开面板。
+         * 为什么不等满：启动器已经把 BILIWHALE_KERNEL_CMD 设好，正常情况 2 秒内就健康。
+         */
+        private static void EnsureKernelThenOpenPanel()
+        {
+            RefreshHealth();
+            if (health != null && health.Reachable)
+            {
+                OpenPanelSmart();
+                return;
+            }
+
+            StartKernel();
+            for (int i = 0; i < 16; i++)
+            {
+                System.Threading.Thread.Sleep(500);
+                RefreshHealth();
+                if (health != null && health.Reachable) break;
+            }
+            OpenPanelSmart();
         }
 
         private static bool KernelUp()
@@ -141,6 +195,11 @@ namespace BiliWhaleTray
                 {
                     selfTest = true;
                 }
+                else if (arg == "--no-open")
+                {
+                    // 调试/浸泡用：只起托盘，不起内核、不开面板
+                    noOpen = true;
+                }
                 else if (arg == "--data-dir" && i + 1 < args.Length)
                 {
                     dataDirArg = args[i + 1];
@@ -162,7 +221,7 @@ namespace BiliWhaleTray
             startKernelItem = new MenuItem("启动内核", delegate { StartKernel(); });
 
             openPanelItem = new MenuItem("打开面板", delegate { OpenPanel(); });
-            runNowItem = new MenuItem("现在跑一轮", delegate { RunNow(); });
+            runNowItem = new MenuItem("现在跑一轮（预演）", delegate { RunNow(); });
             pauseItem = new MenuItem("暂停自动唤醒", delegate { TogglePause(); });
             autostartItem = new MenuItem("开机自启", delegate { ToggleAutostart(); });
 
@@ -290,12 +349,184 @@ namespace BiliWhaleTray
 
         private static void OpenPanel()
         {
+            OpenPanelSmart();
+        }
+
+        /**
+         * 开面板：优先用 Edge 的 app 模式（没有地址栏/标签页，像一个真程序），
+         * 没装 Edge 就退回默认浏览器——体验降级但可用，不报错、不弹命令行（§6.2）。
+         * 已经有面板窗口就先把它带到前面，避免「点两次开出两个窗口」。
+         */
+        private static void OpenPanelSmart()
+        {
+            if (runtime == null) runtime = RuntimeLoader.Load(dataDirArg);
+            if (health == null || !health.Reachable) RefreshHealth();
             if (runtime == null || string.IsNullOrEmpty(runtime.Url))
             {
-                MessageBox.Show("内核没在跑，先点「启动内核」。", AppName);
+                ShowBalloon("内核还没起来", "右键 → 启动内核；起不来就看看日志");
+                return;
+            }
+
+            if (ActivateExistingPanel()) return;
+
+            string edge = FindEdge();
+            if (!string.IsNullOrEmpty(edge))
+            {
+                TryStart(edge, "--app=\"" + runtime.Url + "\" --window-size=1200,820");
                 return;
             }
             TryStart(runtime.Url);
+        }
+
+        /* ---------------- 单实例（第二次双击只把面板带到前面） ---------------- */
+
+        private static bool TakeSingleInstance()
+        {
+            try
+            {
+                bool created;
+                trayMutex = new System.Threading.Mutex(true, TrayMutexName, out created);
+                if (created) CreateOpenSignal(TraySignalName);
+                return created;
+            }
+            catch (Exception)
+            {
+                // Global\ 在受限环境里可能建不出来：退到本会话命名空间（同一台机器照样防重复）
+                try
+                {
+                    bool createdLocal;
+                    trayMutex = new System.Threading.Mutex(true, TrayMutexNameLocal, out createdLocal);
+                    if (createdLocal) CreateOpenSignal(TraySignalNameLocal);
+                    return createdLocal;
+                }
+                catch (Exception)
+                {
+                    return true; // 连命名对象都不让建：退化为不互斥，至少还能用
+                }
+            }
+        }
+
+        private static void CreateOpenSignal(string name)
+        {
+            try
+            {
+                openPanelSignal = new System.Threading.EventWaitHandle(false, System.Threading.EventResetMode.AutoReset, name);
+            }
+            catch (Exception)
+            {
+                openPanelSignal = null;
+            }
+        }
+
+        private static void SignalExistingTray()
+        {
+            if (TrySignal(TraySignalName) || TrySignal(TraySignalNameLocal)) return;
+            // 信号发不出去（很旧的托盘 / 权限）：自己开一次面板，但绝不再起第二个托盘
+            runtime = RuntimeLoader.Load(dataDirArg);
+            OpenPanelSmart();
+        }
+
+        private static bool TrySignal(string name)
+        {
+            try
+            {
+                using (System.Threading.EventWaitHandle handle = System.Threading.EventWaitHandle.OpenExisting(name))
+                {
+                    handle.Set();
+                    return true;
+                }
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
+        /** 起一个 400ms 的轮询：另一个进程点了图标 → 把面板带到前面（跑在 UI 线程上，不跨线程动菜单）。 */
+        private static void StartOpenPanelWatcher()
+        {
+            if (openPanelSignal == null) return;
+            signalTimer = new System.Windows.Forms.Timer();
+            signalTimer.Interval = 400;
+            signalTimer.Tick += delegate
+            {
+                bool signaled = false;
+                try
+                {
+                    signaled = openPanelSignal.WaitOne(0);
+                }
+                catch (Exception)
+                {
+                }
+                if (signaled) OpenPanelSmart();
+            };
+            signalTimer.Start();
+        }
+
+        /* ---------------- 窗口 / 浏览器 ---------------- */
+
+        [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+        private static extern IntPtr FindWindow(string className, string windowName);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool ShowWindow(IntPtr hWnd, int command);
+
+        /** 面板窗口一直开着的时候：恢复并置于前台，不再开第二个（页面 <title> 就是 BiliWhale）。 */
+        private static bool ActivateExistingPanel()
+        {
+            try
+            {
+                IntPtr handle = FindWindow(null, AppName);
+                if (handle == IntPtr.Zero) return false;
+                ShowWindow(handle, 9); // SW_RESTORE
+                return SetForegroundWindow(handle);
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
+        /** Edge 探测顺序（§6.2）：Program Files (x86) → Program Files → 注册表 App Paths → 都没有就返回 null。 */
+        private static string FindEdge()
+        {
+            string relative = "Microsoft\\Edge\\Application\\msedge.exe";
+            string[] roots = new string[]
+            {
+                Environment.GetEnvironmentVariable("ProgramFiles(x86)"),
+                Environment.GetEnvironmentVariable("ProgramFiles"),
+                Environment.GetEnvironmentVariable("ProgramW6432")
+            };
+            for (int i = 0; i < roots.Length; i++)
+            {
+                string root = roots[i];
+                if (string.IsNullOrEmpty(root)) continue;
+                string candidate = Path.Combine(root, relative);
+                if (File.Exists(candidate)) return candidate;
+            }
+            try
+            {
+                using (Microsoft.Win32.RegistryKey key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\msedge.exe"))
+                {
+                    if (key != null)
+                    {
+                        string path = key.GetValue(null) as string;
+                        if (!string.IsNullOrEmpty(path))
+                        {
+                            string trimmed = path.Trim().Trim('"');
+                            if (File.Exists(trimmed)) return trimmed;
+                        }
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                // 读不到注册表就当没装（下一步会退回默认浏览器）
+            }
+            return null;
         }
 
         private static void OpenDataDir()
