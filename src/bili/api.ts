@@ -122,10 +122,10 @@ export class BiliApi implements WbiProvider {
     return { ok: true, data: list.map((item) => fromSearchItem(item, 'search')).filter((v): v is BiliVideo => v !== null) };
   }
 
-  async popular(limit = 20): Promise<Result<BiliVideo[]>> {
+  async popular(limit = 20, page = 1): Promise<Result<BiliVideo[]>> {
     const res = await this.http.json<{ list?: unknown[] }>({
       url: `${API}/x/web-interface/popular`,
-      query: { pn: 1, ps: Math.min(Math.max(limit, 1), 50) },
+      query: { pn: Math.max(1, Math.floor(page)), ps: Math.min(Math.max(limit, 1), 50) },
       referer: REFERER_HOME,
     });
     if (!res.ok) return res;
@@ -145,10 +145,10 @@ export class BiliApi implements WbiProvider {
   }
 
   /** 关注动态：只取视频投稿；没有 bvid 的条目直接跳过。关注流可能为空，由上层兜底。 */
-  async following(limit = 20): Promise<Result<BiliVideo[]>> {
+  async following(limit = 20, page = 1): Promise<Result<BiliVideo[]>> {
     const res = await this.http.json<{ items?: unknown[] }>({
       url: `${API}/x/polymer/web-dynamic/v1/feed/all`,
-      query: { type: 'video', page: 1 },
+      query: { type: 'video', page: Math.max(1, Math.floor(page)) },
       referer: REFERER_HOME,
     });
     if (!res.ok) return res;

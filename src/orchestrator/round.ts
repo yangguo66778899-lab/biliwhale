@@ -258,9 +258,10 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
   const sourcesText = Object.entries(collected.perSource)
     .map(([k, v]) => `${k}:${v}`)
     .join(' ');
-  markPhase('candidates', Date.now() - phase2, collected.candidates.length > 0 ? 'ok' : 'degraded', sourcesText);
+  const pagesText = collected.pages > 1 ? `翻了 ${collected.pages} 页 · ` : '';
+  markPhase('candidates', Date.now() - phase2, collected.candidates.length > 0 ? 'ok' : 'degraded', `${pagesText}${sourcesText}`);
   logger.event('candidates', `取回 ${collected.candidates.length} 条候选`, {
-    data: { sources: sourcesText, errors: collected.errors.length },
+    data: { sources: sourcesText, errors: collected.errors.length, pages: collected.pages },
   });
 
   if (collected.candidates.length === 0) {

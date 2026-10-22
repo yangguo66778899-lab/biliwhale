@@ -14,6 +14,7 @@ import { SecretsService } from '../src/config/secrets.ts';
 import { ConfigService } from '../src/config/service.ts';
 import { Logger } from '../src/shared/logger.ts';
 import { resolvePaths } from '../src/state/paths.ts';
+import { localIso } from '../src/shared/time.ts';
 import { tmpDir } from './helpers.ts';
 import type { Transport, TransportRequest } from '../src/bili/http.ts';
 import type { Result } from '../src/shared/errors.ts';
@@ -111,7 +112,7 @@ function harness(opts: { strangerApproval?: boolean; ownerDirect?: boolean; writ
 /** 先记账：我们发过一条评论。 */
 function seedOurComment(h: Harness, bvid = 'BV1pend1', rpid = '100', aid = 9001): void {
   h.quota.add({
-    at: new Date().toISOString(),
+    at: localIso(),
     type: 'comment',
     bvid,
     aid,
@@ -155,7 +156,7 @@ test('扫描：账本缺 aid 时用视频详情补上，不再静默跳过', asy
   const h = harness();
   // 手工塞一条没有 aid 的评论记录
   h.quota.add({
-    at: new Date().toISOString(),
+    at: localIso(),
     type: 'comment',
     bvid: 'BV1pend1',
     target: '@鲸鲸',
@@ -179,7 +180,7 @@ test('扫描：账本被别的进程改过时先重读磁盘（CLI 发的评论�
   // 模拟「另一个进程」写账本：另开一个 QuotaLedger 指向同一文件
   const other = QuotaLedger.open(path.join(h.dir, 'quota.json'), h.deps.logger);
   other.add({
-    at: new Date().toISOString(),
+    at: localIso(),
     type: 'comment',
     bvid: 'BV1pend1',
     aid: 9001,

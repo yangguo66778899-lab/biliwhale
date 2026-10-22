@@ -227,6 +227,15 @@ export const SPEC = {
       fields: {
         maxVideos: { kind: 'number', label: '一轮最多挑中几条', default: 5, min: 1, max: 20, int: true },
         candidateLimit: { kind: 'number', label: '候选上限', desc: '多源合并后截断到这里', default: 30, min: 1, max: 200, int: true },
+        candidatePages: {
+          kind: 'number',
+          label: '最多翻几页',
+          desc: '候选不够时自动往后翻页（每个源最多这么多页）；翻得越多一轮越慢',
+          default: 3,
+          min: 1,
+          max: 5,
+          int: true,
+        },
         screenLimit: { kind: 'number', label: '送初筛条数', default: 10, min: 1, max: 50, int: true },
         deepReadLimit: { kind: 'number', label: '深读条数', default: 3, min: 1, max: 10, int: true },
         searchDays: { kind: 'number', label: '只搜最近几天', default: 7, min: 1, max: 30, int: true },

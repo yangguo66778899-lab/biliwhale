@@ -13,6 +13,7 @@ import { SecretsService } from '../src/config/secrets.ts';
 import { ConfigService } from '../src/config/service.ts';
 import { Logger } from '../src/shared/logger.ts';
 import { resolvePaths } from '../src/state/paths.ts';
+import { localIso } from '../src/shared/time.ts';
 import { tmpDir } from './helpers.ts';
 import type { Transport, TransportRequest } from '../src/bili/http.ts';
 import type { Result } from '../src/shared/errors.ts';
@@ -140,7 +141,7 @@ test('收藏额度：今天已经 3 条就再收不了', async () => {
   const h = harness();
   for (let i = 0; i < 3; i += 1) {
     h.quota.add({
-      at: new Date().toISOString(),
+      at: localIso(),
       type: 'fav',
       bvid: `BV1old0000${i}`,
       aid: 100 + i,
