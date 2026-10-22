@@ -1,0 +1,17 @@
+{
+  "code": 0,
+  "message": "0",
+  "data": {
+    "bvid": "BV1a0000001",
+    "aid": 10001,
+    "cid": 20001,
+    "title": "AI 工具实测：把周报交给它写，一周后我改回了手动",
+    "desc": "实测了三个 AI 写作工具，重点看能不能写出有用的周报。结论有点反直觉：写得越像人，越难用。",
+    "duration": 754,
+    "pubdate": 1750000000,
+    "pic": "https://i0.hdslb.com/bfs/archive/cover1.jpg",
+    "owner": { "mid": 501, "name": "技术宅小明" },
+    "stat": { "view": 123456, "like": 8000, "reply": 321, "favorite": 900, "coin": 450, "share": 120 },
+    "pages": [{ "cid": 20001, "page": 1, "part": "正片" }]
+  }
+}

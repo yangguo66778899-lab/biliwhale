@@ -1,0 +1,17 @@
+{
+  "code": 0,
+  "message": "0",
+  "data": {
+    "bvid": "BV1a0000004",
+    "aid": 10004,
+    "cid": 20004,
+    "title": "猫咪为什么半夜跑酷：一份不太严肃的行为观察",
+    "desc": "记录了两周家里两只猫的夜间活动，配了红外摄像头，顺便聊了聊猫的作息。",
+    "duration": 1067,
+    "pubdate": 1750400000,
+    "pic": "https://i0.hdslb.com/bfs/archive/cover4.jpg",
+    "owner": { "mid": 502, "name": "猫行为观察" },
+    "stat": { "view": 345678, "like": 21000, "reply": 1500, "favorite": 3200, "coin": 800, "share": 400 },
+    "pages": [{ "cid": 20004, "page": 1, "part": "正片" }]
+  }
+}

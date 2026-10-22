@@ -1,0 +1,17 @@
+{
+  "code": 0,
+  "message": "0",
+  "data": {
+    "bvid": "BV1a0000005",
+    "aid": 10005,
+    "cid": 20005,
+    "title": "自己在家里搭一个能跑的工具链：从零到能用只要一个下午",
+    "desc": "把搜索、转写、摘要串成一条流水线，全程在本机跑，附配置文件。踩了三个坑，第二个最坑。",
+    "duration": 1601,
+    "pubdate": 1750300000,
+    "pic": "https://i0.hdslb.com/bfs/archive/cover5.jpg",
+    "owner": { "mid": 505, "name": "折腾研究所" },
+    "stat": { "view": 234567, "like": 18000, "reply": 890, "favorite": 5600, "coin": 2100, "share": 300 },
+    "pages": [{ "cid": 20005, "page": 1, "part": "正片" }]
+  }
+}

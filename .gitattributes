@@ -1,0 +1,8 @@
+# 统一换行：仓库里一律 LF，Windows 检出也不乱
+* text=auto eol=lf
+
+# 二进制
+*.png binary
+*.ico binary
+*.exe binary
+*.zip binary

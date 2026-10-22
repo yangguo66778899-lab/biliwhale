@@ -1,0 +1,16 @@
+{
+  "code": 0,
+  "message": "0",
+  "data": {
+    "subtitle": {
+      "ai_status": 1,
+      "subtitles": [
+        {
+          "lan": "ai-zh",
+          "lan_doc": "中文（自动生成）",
+          "subtitle_url": "https://aisubtitle.hdslb.com/bfs/subtitle/BV1a0000001.json?auth_key=demo"
+        }
+      ]
+    }
+  }
+}

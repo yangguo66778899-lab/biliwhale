@@ -1,0 +1,27 @@
+# 依赖与构建
+node_modules/
+dist/
+*.tsbuildinfo
+.npm-cache/
+
+# 测试临时目录
+test/.tmp/
+
+# 运行时数据（真实数据永不入库）
+data/
+.run/
+.env
+.env.*
+secrets.json
+runtime.json
+
+# 日志与临时
+*.log
+tmp/
+.tmp/
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

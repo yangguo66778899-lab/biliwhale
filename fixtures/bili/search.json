@@ -1,0 +1,57 @@
+{
+  "code": 0,
+  "message": "0",
+  "data": {
+    "result": [
+      {
+        "bvid": "BV1a0000001",
+        "aid": 10001,
+        "title": "<em class=\"keyword\">AI</em> 工具实测：把周报交给它写，一周后我改回了手动",
+        "description": "实测了三个 AI 写作工具，重点看能不能写出有用的周报。结论有点反直觉。",
+        "author": "技术宅小明",
+        "play": 123456,
+        "review": 321,
+        "video_review": 88,
+        "duration": "12:34",
+        "pubdate": 1750000000,
+        "pic": "https://i0.hdslb.com/bfs/archive/cover1.jpg"
+      },
+      {
+        "bvid": "BV1a0000002",
+        "aid": 10002,
+        "title": "纯音乐｜雨天的窗台（一小时循环）",
+        "description": "没有解说的纯音乐合集，适合工作时当背景。",
+        "author": "music_loop",
+        "play": 45678,
+        "review": 12,
+        "duration": "61:20",
+        "pubdate": 1750100000,
+        "pic": "https://i0.hdslb.com/bfs/archive/cover2.jpg"
+      },
+      {
+        "bvid": "BV1a0000003",
+        "aid": 10003,
+        "title": "【带货】这款 AI 键盘我劝你别买",
+        "description": "限时优惠，点击下方链接，全网最低价。",
+        "author": "每日好物推荐",
+        "play": 987654,
+        "review": 2100,
+        "duration": "08:02",
+        "pubdate": 1750200000,
+        "pic": "https://i0.hdslb.com/bfs/archive/cover3.jpg"
+      },
+      {
+        "bvid": "BV1a0000005",
+        "aid": 10005,
+        "title": "自己在家里搭一个能跑的工具链：从零到能用只要一个下午",
+        "description": "把搜索、转写、摘要串成一条流水线，全程在本机跑，附配置文件。",
+        "author": "折腾研究所",
+        "play": 234567,
+        "review": 890,
+        "duration": "26:41",
+        "pubdate": 1750300000,
+        "pic": "https://i0.hdslb.com/bfs/archive/cover5.jpg"
+      }
+    ]
+  }
+}

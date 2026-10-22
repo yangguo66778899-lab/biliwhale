@@ -1,0 +1,17 @@
+{
+  "code": 0,
+  "message": "0",
+  "data": {
+    "bvid": "BV1a0000002",
+    "aid": 10002,
+    "cid": 20002,
+    "title": "纯音乐｜雨天的窗台（一小时循环）",
+    "desc": "没有解说的纯音乐合集，适合工作时当背景。",
+    "duration": 3680,
+    "pubdate": 1750100000,
+    "pic": "https://i0.hdslb.com/bfs/archive/cover2.jpg",
+    "owner": { "mid": 503, "name": "music_loop" },
+    "stat": { "view": 45678, "like": 2100, "reply": 12, "favorite": 800, "coin": 90, "share": 30 },
+    "pages": [{ "cid": 20002, "page": 1, "part": "正片" }]
+  }
+}

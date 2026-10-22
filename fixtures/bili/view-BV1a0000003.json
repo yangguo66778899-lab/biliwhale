@@ -1,0 +1,17 @@
+{
+  "code": 0,
+  "message": "0",
+  "data": {
+    "bvid": "BV1a0000003",
+    "aid": 10003,
+    "cid": 20003,
+    "title": "【带货】这款 AI 键盘我劝你别买",
+    "desc": "限时优惠，点击下方链接，全网最低价。",
+    "duration": 482,
+    "pubdate": 1750200000,
+    "pic": "https://i0.hdslb.com/bfs/archive/cover3.jpg",
+    "owner": { "mid": 504, "name": "每日好物推荐" },
+    "stat": { "view": 987654, "like": 1200, "reply": 2100, "favorite": 200, "coin": 30, "share": 60 },
+    "pages": [{ "cid": 20003, "page": 1, "part": "正片" }]
+  }
+}

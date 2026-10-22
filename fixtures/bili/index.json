@@ -1,0 +1,25 @@
+{
+  "note": "离线夹具路由：match 里的子串必须全部出现在请求 URL 里；按顺序取第一条命中的规则。",
+  "rules": [
+    { "match": ["/x/web-interface/nav"], "file": "nav.json" },
+    { "match": ["/x/web-interface/wbi/search/type"], "file": "search.json" },
+    { "match": ["/x/web-interface/popular"], "file": "popular.json" },
+    { "match": ["/x/polymer/web-dynamic/v1/feed/all"], "file": "following.json" },
+    { "match": ["/x/web-interface/ranking/v2"], "file": "ranking.json" },
+    { "match": ["/x/player/wbi/v2", "BV1a0000001"], "file": "player-BV1a0000001.json" },
+    { "match": ["/x/player/wbi/v2", "BV1a0000002"], "file": "player-BV1a0000002.json" },
+    { "match": ["/x/player/wbi/v2", "BV1a0000003"], "file": "player-BV1a0000003.json" },
+    { "match": ["/x/player/wbi/v2", "BV1a0000004"], "file": "player-BV1a0000004.json" },
+    { "match": ["/x/player/wbi/v2", "BV1a0000005"], "file": "player-BV1a0000005.json" },
+    { "match": ["/x/web-interface/view", "BV1a0000001"], "file": "view-BV1a0000001.json" },
+    { "match": ["/x/web-interface/view", "BV1a0000002"], "file": "view-BV1a0000002.json" },
+    { "match": ["/x/web-interface/view", "BV1a0000003"], "file": "view-BV1a0000003.json" },
+    { "match": ["/x/web-interface/view", "BV1a0000004"], "file": "view-BV1a0000004.json" },
+    { "match": ["/x/web-interface/view", "BV1a0000005"], "file": "view-BV1a0000005.json" },
+    { "match": ["aisubtitle", "BV1a0000001"], "file": "subtitle-BV1a0000001.json" },
+    { "match": ["aisubtitle", "BV1a0000003"], "file": "subtitle-BV1a0000003.json" },
+    { "match": ["aisubtitle", "BV1a0000004"], "file": "subtitle-BV1a0000004.json" },
+    { "match": ["aisubtitle", "BV1a0000005"], "file": "subtitle-BV1a0000005.json" },
+    { "match": ["/x/v2/reply"], "file": "reply.json" }
+  ]
+}

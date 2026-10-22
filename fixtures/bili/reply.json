@@ -1,0 +1,86 @@
+{
+  "code": 0,
+  "message": "0",
+  "data": {
+    "replies": [
+      {
+        "rpid": 90001,
+        "parent": 0,
+        "root": 0,
+        "like": 1200,
+        "ctime": 1750500000,
+        "mid": 601,
+        "member": { "mid": 601, "uname": "路人甲" },
+        "content": { "message": "这条真的说到点子上，工具越会替你表达，越不像你自己写的。" },
+        "replies": []
+      },
+      {
+        "rpid": 90002,
+        "parent": 0,
+        "root": 0,
+        "like": 860,
+        "ctime": 1750501000,
+        "mid": 602,
+        "member": { "mid": 602, "uname": "会写周报的人" },
+        "content": { "message": "我用的就是第三个思路，只让它扩写要点，格式自己调。" },
+        "replies": [
+          {
+            "rpid": 90021,
+            "parent": 90002,
+            "root": 90002,
+            "like": 30,
+            "ctime": 1750502000,
+            "mid": 603,
+            "member": { "mid": 603, "uname": "路过" },
+            "content": { "message": "请问你说的格式是自己写的模板吗" },
+            "replies": []
+          }
+        ]
+      },
+      {
+        "rpid": 90003,
+        "parent": 0,
+        "root": 0,
+        "like": 430,
+        "ctime": 1750503000,
+        "mid": 604,
+        "member": { "mid": 604, "uname": "半个产品经理" },
+        "content": { "message": "第 15 秒那句说得好，机器写得越顺，看的人越觉得你在糊弄。" },
+        "replies": []
+      },
+      {
+        "rpid": 90004,
+        "parent": 0,
+        "root": 0,
+        "like": 210,
+        "ctime": 1750504000,
+        "mid": 605,
+        "member": { "mid": 605, "uname": "夜猫子" },
+        "content": { "message": "有配置模板吗，想照抄一下。" },
+        "replies": []
+      },
+      {
+        "rpid": 90005,
+        "parent": 0,
+        "root": 0,
+        "like": 90,
+        "ctime": 1750505000,
+        "mid": 606,
+        "member": { "mid": 606, "uname": "认真看完了" },
+        "content": { "message": "结论反直觉但能对上经验，收藏了。" },
+        "replies": []
+      },
+      {
+        "rpid": 90006,
+        "parent": 0,
+        "root": 0,
+        "like": 12,
+        "ctime": 1750506000,
+        "mid": 607,
+        "member": { "mid": 607, "uname": "新来的" },
+        "content": { "message": "第一个工具叫什么名字，视频里没说清。" },
+        "replies": []
+      }
+    ]
+  }
+}
