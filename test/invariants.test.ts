@@ -162,3 +162,35 @@ test('托盘源码里没有 B 站写接口，也没有直播/弹幕', () => {
   // 只允许访问本机控制接口
   assert.match(text, /127\.0\.0\.1/);
 });
+
+test('面板（M2）：静态资源在仓库里、离线可用、不引外链、不带内联脚本', () => {
+  const uiDir = path.join(SRC, 'ui');
+  for (const file of ['index.html', 'app.js', 'style.css']) {
+    assert.ok(fs.existsSync(path.join(uiDir, file)), `缺少 src/ui/${file}`);
+  }
+
+  const html = fs.readFileSync(path.join(uiDir, 'index.html'), 'utf8');
+  // CSP 是 script-src 'self'：内联脚本会被浏览器直接拦掉，所以这里不许有
+  assert.equal(/<script(?![^>]*\bsrc=)[^>]*>/i.test(html), false, 'index.html 里不能有内联 <script>');
+  assert.match(html, /<script src="\/app\.js">/);
+
+  for (const file of ['index.html', 'app.js', 'style.css']) {
+    const text = fs.readFileSync(path.join(uiDir, file), 'utf8');
+    // 只允许 SVG 命名空间这一个「外部」URL；CDN / 字体 / 图片外链一律不许
+    const external = (text.match(/https?:\/\/[^\s"'<>)]+/g) ?? []).filter((url) => !url.startsWith('http://www.w3.org/'));
+    assert.deepEqual(external, [], `${file} 里不该引用外部地址：${external.join(', ')}`);
+  }
+
+  // 面板不该自己拼 B 站地址：它只和本机内核说话
+  for (const file of ['index.html', 'app.js']) {
+    const text = fs.readFileSync(path.join(uiDir, file), 'utf8');
+    assert.equal(text.includes('bilibili.com'), false, `${file} 不该直接访问 B 站`);
+  }
+});
+
+test('QR 编码器不引入任何第三方依赖（自己实现，外部参照对拍过）', () => {
+  const text = fs.readFileSync(path.join(SRC, 'qr', 'encoder.ts'), 'utf8');
+  assert.equal(/from '[^.]/.test(text), false, 'src/qr 只允许相对导入');
+  assert.equal(text.includes('node_modules'), false);
+  assert.ok(fs.existsSync(path.join(ROOT, 'test', 'fixtures', 'qr-cases.json')), '缺 QR 参照夹具');
+});

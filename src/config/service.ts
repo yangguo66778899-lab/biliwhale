@@ -93,6 +93,11 @@ export class ConfigService {
     return { ok: true, issues: result.issues };
   }
 
+  /** 最近一次加载/保存时的校验问题（面板与诊断包要展示）。 */
+  getIssues(): ConfigIssue[] {
+    return [...this.issues];
+  }
+
   /** 只校验不落盘（面板的「校验」按钮 / 导入前检查）。 */
   validateOnly(raw: unknown): ValidateResult {
     return validateConfig(raw);

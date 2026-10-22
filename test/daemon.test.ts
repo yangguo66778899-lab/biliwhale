@@ -171,7 +171,11 @@ test('暂停： paused 状态下 tick 不跑，resume 之后恢复', async () =>
     assert.equal(before, 0, '暂停时到点也不跑');
 
     const headers = { authorization: `Bearer ${started.token}` };
-    const resumed = (await (await fetch(`http://127.0.0.1:${started.port}/api/resume`, { method: 'POST', headers })).json()) as { ok: boolean };
+    // M2 起写操作要 CSRF：先拿 session
+    const session = (await (await fetch(`http://127.0.0.1:${started.port}/api/session`, { headers })).json()) as { csrfToken: string };
+    const resumed = (await (
+      await fetch(`http://127.0.0.1:${started.port}/api/resume`, { method: 'POST', headers: { ...headers, 'x-csrf-token': session.csrfToken } })
+    ).json()) as { ok: boolean };
     assert.equal(resumed.ok, true);
 
     await started.tickNow();

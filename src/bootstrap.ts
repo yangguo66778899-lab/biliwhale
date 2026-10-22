@@ -17,6 +17,7 @@ import { Logger } from './shared/logger.ts';
 import { localIso } from './shared/time.ts';
 import { createBili } from './bili/api.ts';
 import type { BiliApi } from './bili/api.ts';
+import type { Transport } from './bili/http.ts';
 import { LlmClient } from './llm/client.ts';
 import { discoverModel, keyFingerprint } from './llm/discovery.ts';
 import { ensurePromptFiles } from './agent/prompts.ts';
@@ -44,6 +45,8 @@ export interface AppContext {
   feedback: FeedbackLedger;
   runs: RunStore;
   api: BiliApi;
+  /** 原始传输层（登录要读 Set-Cookie）。 */
+  transport: Transport;
   llm: LlmClient;
   /** 配置里写的模型名（和「实际用的」对照）。 */
   configuredModel: string;
@@ -88,15 +91,19 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<AppContext
   };
 
   let api: BiliApi;
+  let transport: Transport;
   let llm: LlmClient;
 
   if (opts.fixtures) {
     const offline = await import('./dev/offline.ts');
     const built = offline.createOfflineStack({ paths, logger, config: current });
     api = built.api;
+    transport = built.transport;
     llm = built.llm;
   } else {
-    api = createBili({ cookie: secrets.cookie(), logger, onRisk }).api;
+    const bili = createBili({ cookie: () => secrets.cookie(), logger, onRisk });
+    api = bili.api;
+    transport = bili.http;
     llm = new LlmClient({
       apiKey: secrets.apiKey(),
       baseUrl: current.llm.baseUrl,
@@ -143,6 +150,7 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<AppContext
     feedback,
     runs,
     api,
+    transport,
     llm,
     configuredModel,
     fixtures: opts.fixtures ?? false,

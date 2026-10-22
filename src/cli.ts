@@ -24,6 +24,7 @@ import { ensurePromptFiles } from './agent/prompts.ts';
 import { runRound } from './orchestrator/round.ts';
 import type { RoundDeps } from './orchestrator/round.ts';
 import { startDaemon, resolveTrayCommand, resolveTrayExe } from './daemon/index.ts';
+import { runDoctor } from './doctor.ts';
 import { readRuntime, readHeartbeat, heartbeatFresh } from './lifecycle/runtime.ts';
 import { InstanceLock, isProcessAlive } from './lifecycle/lock.ts';
 import { AutostartService } from './lifecycle/autostart.ts';
@@ -43,7 +44,7 @@ interface ParsedArgs {
   trigger: RunTrigger;
 }
 
-const VERSION = '0.2.0-M1';
+const VERSION = '0.3.0-M2';
 
 function parseArgs(argv: string[]): ParsedArgs {
   const args: ParsedArgs = {
@@ -181,80 +182,25 @@ async function commandRun(args: ParsedArgs): Promise<number> {
 async function commandDoctor(args: ParsedArgs): Promise<number> {
   const ctx = await bootstrap(args);
   const cfg = ctx.config.get();
-  const rows: Array<[string, boolean | 'warn', string]> = [];
+  const report = await runDoctor(ctx, {
+    version: VERSION,
+    fixtures: ctx.fixtures,
+    mockModel: ctx.mockModel,
+    offline: args.fixtures,
+    autostartCommand: resolveTrayCommand(),
+    trayExe: resolveTrayExe(),
+  });
 
-  rows.push(['Node 版本', Number(process.versions.node.split('.')[0]) >= 22 ? true : 'warn', process.version]);
-  rows.push(['数据目录', fs.existsSync(ctx.paths.dataDir) ? true : false, ctx.paths.dataDir]);
-  rows.push(['日志目录', fs.existsSync(ctx.paths.logsDir) ? true : false, ctx.paths.logsDir]);
-  rows.push(['配置文件', fs.existsSync(ctx.paths.config) ? true : 'warn', ctx.paths.config]);
-  const keyOptional = ctx.fixtures || ctx.mockModel;
-  rows.push([
-    'DeepSeek key',
-    ctx.secrets.hasApiKey() ? true : keyOptional ? 'warn' : false,
-    ctx.secrets.hasApiKey() ? '已配置' : keyOptional ? '缺失（当前是夹具/模拟模式，不强制）' : '缺失（设 BILIWHALE_API_KEY）',
-  ]);
-  const hint = ctx.secrets.accountHint();
-  rows.push(['B 站登录', hint.hasCookie ? true : 'warn', hint.uname ? `${hint.uname}（${hint.mid}）` : hint.hasCookie ? hint.fingerprint : '未登录（只能读评论，字幕会拿不到）']);
-
-  const ffmpeg = findFfmpeg(cfg.media.ffmpegPath);
-  rows.push(['ffmpeg', ffmpeg ? true : 'warn', ffmpeg ?? '没找到（M0 不抽帧，可忽略）']);
-
-  try {
-    const stat = fs.statfsSync(ctx.paths.dataDir);
-    const freeGb = (Number(stat.bavail) * Number(stat.bsize)) / 1024 / 1024 / 1024;
-    rows.push(['磁盘剩余', freeGb > 1 ? true : 'warn', `${freeGb.toFixed(1)} GB`]);
-  } catch {
-    rows.push(['磁盘剩余', 'warn', '查询失败']);
+  const out = ['', `BiliWhale ${VERSION} · 体检`, `配置模型：${cfg.llm.model}${cfg.llm.modelAuto ? '（自动发现开）' : ''}`, ''];
+  for (const row of report.rows) {
+    const mark = row.level === 'ok' ? '✓' : row.level === 'warn' ? '!' : '✗';
+    out.push(`  ${mark} ${row.name.padEnd(12, ' ')} ${row.detail}`);
   }
-
-  if (!args.fixtures && hint.hasCookie) {
-    const nav = await ctx.api.nav();
-    rows.push(['nav 登录态', nav.ok && nav.data.isLogin ? true : 'warn', nav.ok ? (nav.data.isLogin ? `已登录：${nav.data.uname}` : 'cookie 无效或已过期') : nav.error.message]);
-  }
-
-  if (!args.fixtures && ctx.secrets.hasApiKey()) {
-    const models = await ctx.llm.listModels();
-    rows.push(['模型列表', models.ok ? true : 'warn', models.ok ? `${models.data.length} 个：${models.data.slice(0, 6).join(', ')}` : models.error.message]);
-  }
-
-  // ---- M1：常驻相关 ----
-  const lockFile = path.join(ctx.paths.localDir, 'instance.lock');
-  const holder = fs.existsSync(lockFile) ? new InstanceLock(lockFile).read() : null;
-  if (holder) {
-    const alive = isProcessAlive(holder.pid);
-    rows.push(['单实例锁', alive ? 'warn' : 'warn', alive ? `已有实例在跑（pid ${holder.pid}，端口 ${holder.port ?? '?'}）` : `陈旧锁（pid ${holder.pid} 已不在，下次启动会自动清）`]);
-  } else {
-    rows.push(['单实例锁', true, '没有实例在跑']);
-  }
-
-  const runtime = readRuntime(ctx.paths);
-  rows.push(['控制接口', runtime ? true : 'warn', runtime ? `${runtime.url}（pid ${runtime.pid}，token 在 runtime.json）` : '未运行（serve 起来后可被托盘接管）']);
-
-  const beat = readHeartbeat(ctx.paths);
-  rows.push(['心跳', heartbeatFresh(beat) ? true : 'warn', heartbeatFresh(beat) ? `正常（${beat?.at}）` : beat ? `过期（${beat.at}）` : '还没有心跳（没跑过 serve）']);
-
-  const autostart = new AutostartService({ command: resolveTrayCommand() });
-  const auto = await autostart.status();
-  rows.push([
-    '开机自启',
-    auto.enabled ? true : 'warn',
-    auto.enabled ? `${auto.mechanism === 'registry' ? '注册表 Run' : '启动文件夹'} · ${auto.command ?? ''}` : auto.warning ?? '未开启',
-  ]);
-
-  // 托盘可执行文件在不在（M1 的壳）
-  const trayExe = resolveTrayExe();
-  rows.push(['托盘程序', fs.existsSync(trayExe) ? true : 'warn', fs.existsSync(trayExe) ? trayExe : `还没编译（运行 scripts/build-tray.ps1）：${trayExe}`]);
-
-  const lines = ['', `BiliWhale ${VERSION} · 体检`, `配置模型：${cfg.llm.model}${cfg.llm.modelAuto ? '（自动发现开）' : ''}`, ''];
-  for (const [name, state, detail] of rows) {
-    const mark = state === true ? '✓' : state === 'warn' ? '!' : '✗';
-    lines.push(`  ${mark} ${name.padEnd(12, ' ')} ${detail}`);
-  }
-  const bad = rows.some(([, state]) => state === false);
-  lines.push('', bad ? '有硬性项没过（✗），先修它。' : '没有硬伤（! 是可降级项）。', '');
-  process.stdout.write(lines.join('\n'));
-  return bad ? 1 : 0;
+  out.push('', report.healthy ? '没有硬伤（! 是可降级项）。' : '有硬性项没过（✗），先修它。', '');
+  process.stdout.write(out.join('\n'));
+  return report.healthy ? 0 : 1;
 }
+
 
 async function commandServe(args: ParsedArgs): Promise<number> {
   const started = await startDaemon({

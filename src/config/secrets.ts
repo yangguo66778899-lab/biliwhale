@@ -90,6 +90,18 @@ export class SecretsService {
     this.save();
   }
 
+  /** 登录后回填账号信息（不碰 cookie 本身）。 */
+  setAccount(account: { mid?: number; uname?: string }): void {
+    const cookie = this.secrets.bili?.cookie ?? '';
+    this.secrets.bili = {
+      ...(this.secrets.bili ?? {}),
+      cookie,
+      ...(account.mid ? { mid: account.mid } : {}),
+      ...(account.uname ? { uname: account.uname } : {}),
+    };
+    if (cookie) this.save();
+  }
+
   /** 只清本地，不调远端登出（避免把浏览器里的会话一起吊销）。 */
   clearCookie(): void {
     delete this.secrets.bili;

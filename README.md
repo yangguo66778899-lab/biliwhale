@@ -6,19 +6,21 @@ BiliWhale
 
 只调用 DeepSeek；不依赖 Python、不依赖任何 agent 宿主、不依赖数据库。
 
-本仓库当前状态：**M1（作息 + 托盘）已完成**。M0 的「一轮」在真模型下落过地（`deepseek-flash`、真 B 站、30→10→3→挑中 1），
-M1 把它装进了一个常驻进程：到点自己醒、托盘可控、单实例、开机自启。
+本仓库当前状态：**M2（面板 + 登录）已完成**。M0 让「一轮」跑通（真模型 `deepseek-flash`、真 B 站、30→10→3→挑中 1），
+M1 把它装进常驻进程（到点自己醒、托盘可控、单实例、开机自启），
+M2 给了它一个只有你自己能打开的本地面板：**所有配置在界面上改、扫码登录、报告与日记能读、体检与诊断包能下**。
 
 **仍然没有任何写 B 站的能力**（代码里不存在发评论/私信/收藏/动态/点赞的函数）。
 
-- 常驻跑起来：`npm run serve`（或 `node src/cli.ts serve`），托盘读 `runtime.json` 接管
-- 编译托盘：`npm run tray:build` → `shell\BiliWhaleTray.exe`
+- 常驻跑起来：`npm run serve`（或 `node src/cli.ts serve`），它会打印面板地址（`http://127.0.0.1:<port>/?token=…`）
+- 面板：概览 / 设置 / 账号（扫码或粘 cookie）/ 报告 / 日记 / 日志 / 关于；离线可用，不引 CDN
+- 托盘：`npm run tray:build` → `shell\BiliWhaleTray.exe`，右键可「打开面板」「现在跑一轮」「暂停」
 - 离线验证（不联网、不花钱、不需要凭据）：`npm run m0:offline`
 - 真接口验证：`npm run smoke:bili`（只读）与 `npm run m0:live-read`（真 B 站数据 + 占位模型）
 - 真实跑一轮：设 `BILIWHALE_API_KEY`（可选 `BILIWHALE_COOKIE`）后 `node src/cli.ts run --now --dry`
 
 完整需求与验收标准见 [`独立程序-需求文档.md`](./独立程序-需求文档.md)（v0.5），
-逐条验收对照见 [`docs/M0-验收记录.md`](./docs/M0-验收记录.md) 与 [`docs/M1-验收记录.md`](./docs/M1-验收记录.md)，
+逐条验收对照见 [`docs/M0-验收记录.md`](./docs/M0-验收记录.md)、[`docs/M1-验收记录.md`](./docs/M1-验收记录.md)、[`docs/M2-验收记录.md`](./docs/M2-验收记录.md)，
 实施状态与已知限制见 [`CHANGELOG.md`](./CHANGELOG.md)，模块与不变式见 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)。
 
 ---
@@ -71,11 +73,27 @@ shell\BiliWhaleTray.exe
 node src/cli.ts run --now --dry
 
 # 6) 验证
-npm test              # 136 个用例：调度/锁/控制接口/守护进程/工具循环/真 HTTP 适配层/离线整轮
+npm test              # 165 个用例：面板/登录/二维码/调度/锁/控制接口/守护进程/工具循环/离线整轮
 npm run m0:offline    # 夹具整轮：不联网、不需要凭据
 npm run m0:live-read  # 真实 B 站数据 + 占位模型（不代表模型质量）
 npm run smoke:bili    # 真 B 站只读冒烟：WBI / 搜索 / 视频 / 评论 / 字幕轨
 ```
+
+### 面板（M2）
+
+`serve` 起来后打开它打印的地址（`http://127.0.0.1:<port>/?token=…`），或从托盘右键「打开面板」：
+
+| 页 | 内容 |
+|---|---|
+| 概览 | 状态、下一次唤醒、今日额度与花费、最近一轮；预演 / 跑一轮 / 暂停恢复；体检表 |
+| 设置 | 20 组、96 个字段，全部来自 `config/spec.ts` 的元数据；保存即生效，可校验、导出、导入、恢复默认 |
+| 账号 | 扫码登录（二维码 + 2 秒轮询）、cookie 粘贴、复核、退出（只清本机）、UID 与凭据指纹 |
+| 报告 / 日记 | 按日期列表 + Markdown 预览（日记分「给你看的」「给自己看的」两本，可按内容搜索） |
+| 日志 | 事件流（级别过滤）+ 下载脱敏诊断包 |
+| 关于 | 版本、数据目录、模型、今日预算、快速操作 |
+
+面板的三个前提：只绑 `127.0.0.1`；所有请求要 Bearer token；写操作还要 `x-csrf-token`（页面自动处理）。
+token 在 `runtime.json`（权限 600），关掉页面不失效，换一个端口就换一个 token。
 
 ### 常驻形态（M1）
 
@@ -99,8 +117,10 @@ npm run smoke:bili    # 真 B 站只读冒烟：WBI / 搜索 / 视频 / 评论 /
 
 凭据（不进仓库、不进日志）：
 
-- DeepSeek：环境变量 `BILIWHALE_API_KEY`，或首次运行时写入 `<data>/secrets.json`
-- B 站：环境变量 `BILIWHALE_COOKIE`（`SESSDATA=...; bili_jct=...; buvid3=...`），或写入 `secrets.json`
+- DeepSeek：环境变量 `BILIWHALE_API_KEY`，或首次运行时写入 `<data>/secrets.json`，或在面板「设置」里填
+- B 站：面板「账号」页扫码（推荐），或粘 `SESSDATA=...; bili_jct=...; buvid3=...`，或环境变量 `BILIWHALE_COOKIE`
+
+面板改配置写的是 `<data>/config.json`（原子写 + `.bak`）；凭据永远单独放 `secrets.json`，导出配置不会带上它们。
 
 数据目录（Windows 标准位置，全新开始，不读任何旧数据）：
 
@@ -117,10 +137,11 @@ npm run smoke:bili    # 真 B 站只读冒烟：WBI / 搜索 / 视频 / 评论 /
 --------------------------------------
 
 - 所有对外发言类写操作（评论 / 私信 / 动态 / 点赞）**默认关闭**；收藏默认开但可关。
-- M0/M1 只有只读能力：搜索、视频信息、字幕、评论。**代码里没有写接口**。
-- 登录凭据只存 `secrets.json`，永不回显、永不进日志（统一 redact）。
+- M0/M1/M2 只有只读能力：搜索、视频信息、字幕、评论。**代码里没有写接口**。
+- 登录凭据只存 `secrets.json`，永不回显、永不进日志（统一 redact）；导出配置与诊断包都不带凭据。
 - 不刷量、不批量、不绕过风控；B 站请求全部串行，带最小间隔与抖动。
-- 本地面板只绑 `127.0.0.1`，所有接口要 token（在 `runtime.json` 里，权限 600），并校验 Host。
+- 本地面板只绑 `127.0.0.1`，所有接口要 token（在 `runtime.json` 里，权限 600），并校验 Host；
+  写操作还要 CSRF token，页面带 CSP（无内联脚本、无外链）。
 
 ---
 
@@ -131,11 +152,16 @@ npm run smoke:bili    # 真 B 站只读冒烟：WBI / 搜索 / 视频 / 评论 /
 src/
 ├── cli.ts              # 命令行入口（run / serve / doctor / config）
 ├── bootstrap.ts        # 装配：配置+账本+B站客户端+模型客户端（CLI 与守护进程共用）
-├── daemon/             # 守护进程：单实例、调度循环、控制接口、心跳、优雅退出
+├── doctor.ts           # 体检（CLI 与面板共用一份）
+├── diagnostics.ts      # 脱敏诊断包
+├── daemon/             # 守护进程：单实例、调度循环、心跳、优雅退出；api.ts = 面板接口实现
 ├── scheduler/          # 生物钟：计划生成（纯函数）+ tick 判定
 ├── lifecycle/          # 单实例锁、runtime.json / 心跳、开机自启
-├── http/               # 本地控制接口 + 极简状态页（M2 换正式面板）
-├── config/             # 配置 schema、默认值、校验、原子读写；secrets 独立
+├── http/               # 本地控制接口 + 静态资源服务（server.ts）
+├── ui/                 # 面板静态资源（原生 JS/CSS，无构建、无 CDN）
+├── account/            # 扫码登录 + cookie 粘贴 + 登录态复核
+├── qr/                 # 二维码编码器（自己写，零依赖，外部参照对拍过）
+├── config/             # 配置 schema、默认值、校验、原子读写、面板元数据（describe.ts）；secrets 独立
 ├── state/              # state/seen/quota/feedback/runs 账本（原子写）
 ├── orchestrator/       # 一轮的相位编排、跳过分支、闸门、落盘
 ├── agent/              # prompt 组装、工具装配、工具循环、输出校验
@@ -146,25 +172,26 @@ src/
 └── shared/             # 类型、日志（脱敏）、原子写、时间、错误分类
 shell/BiliWhaleTray.cs  # C# 5 托盘（源码入库，exe 由 npm run tray:build 生成）
 scripts/                # smoke-bili.ts（真接口只读冒烟）、build-tray.ps1
-test/                   # 单元 + 集成（136 个用例）
+test/                   # 单元 + 集成（165 个用例，含二维码对拍与面板渲染）
 fixtures/               # 离线夹具（B 站响应、模型输出）
-docs/                   # 架构说明、B 站只读接口规格、M0/M1 验收记录
+docs/                   # 架构说明、B 站只读接口规格、M0/M1/M2 验收记录
 ```
 
 ---
 
-已知限制（M1 阶段）
+已知限制（M2 阶段）
 --------------------
 
+- **检查更新与反馈入口还没做**：需要远端仓库地址与打包形态，留 M5（面板「关于」页只有版本/目录/许可证）。
 - **崩溃自愈还没做**：内核挂了不会自动重启（文档要求「壳/计划任务负责重启」）。托盘只会显示「内核没在跑」，重启退避留 M5/M6。
 - **托盘要自己编译**：`npm run tray:build`（用 .NET Framework 自带 csc，不需要 SDK）；没编译时 `doctor` 会提示。
-- **写操作仍然不存在**：M3 才会有评论/私信/收藏/动态/点赞，M4 才有监听与聊天。
+- **写操作仍然不存在**：M3 才会有评论/私信/收藏/动态/点赞，M4 才有监听与聊天；面板里这些配置项现在只是配置。
 - **字幕需要登录**：匿名请求拿不到字幕轨（实测 0 条），所以不带 cookie 时的「因无字幕跳过」是预期，不代表视频真没字幕。
 - **代理还没接**：`app.proxy` 字段与校验已就位，实际链路待 M5 统一接（Node 24 的 env proxy 方案）。
 - **不抽帧**：ffmpeg 只在体检里检查，`media.frames` 目前不生效。
 - **日报由代码骨架 + 模型正文组成**：每轮的「### 这一轮」由模型写（`report_md`），「挑中的 / 看过的 / 今天的账」由代码生成；排障信息单独放在「### 运行备注（排障用）」。
 
-后续里程碑（见需求文档 §15）：M2 面板 + 扫码登录，M3 分享与闸门，M4 次要写 + 监听/聊天，M5 打包，M6 硬化。
+后续里程碑（见需求文档 §15）：M3 分享与闸门，M4 次要写 + 监听/聊天，M5 打包，M6 硬化。
 
 ---
 

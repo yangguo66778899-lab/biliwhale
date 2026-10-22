@@ -30,6 +30,19 @@ export interface TransportRequest {
   /** 写操作：不重试。 */
   noRetry?: boolean;
   timeoutMs?: number;
+  /** 是否跟随重定向；扫码轮询必须 manual，否则拿不到 Set-Cookie。 */
+  redirect?: 'follow' | 'manual';
+  /** 这个请求不带 cookie（登录流程用）。 */
+  withoutCookie?: boolean;
+}
+
+/** 原始响应：需要读响应头（Set-Cookie）或状态码时用。 */
+export interface RawResponse {
+  status: number;
+  headers: Record<string, string>;
+  /** 逐条 Set-Cookie（已按需合并）。 */
+  setCookies: string[];
+  body: string;
 }
 
 export interface Transport {
@@ -38,6 +51,8 @@ export interface Transport {
   jsonEnvelope<T>(req: TransportRequest): Promise<Result<BiliEnvelope<T>>>;
   /** 取原始文本（字幕 CDN 用）。 */
   text?(req: TransportRequest): Promise<Result<string>>;
+  /** 取完整响应（扫码轮询要读 Set-Cookie）。 */
+  raw?(req: TransportRequest): Promise<Result<RawResponse>>;
 }
 
 export interface BiliEnvelope<T> {
@@ -52,7 +67,8 @@ export interface WbiProvider {
 }
 
 export interface BiliHttpOptions {
-  cookie: string;
+  /** 固定 cookie，或「每次请求时读一次」的取值函数（登录后换 cookie 不用重建客户端）。 */
+  cookie: string | (() => string);
   logger: Logger;
   userAgent?: string;
   readIntervalMs?: number;
@@ -95,7 +111,7 @@ class SerialQueue {
 
 export class BiliHttp implements Transport {
   private readonly queue = new SerialQueue();
-  private readonly cookie: string;
+  private readonly cookieSource: string | (() => string);
   private readonly logger: Logger;
   private readonly userAgent: string;
   private readonly readIntervalMs: number;
@@ -112,7 +128,7 @@ export class BiliHttp implements Transport {
   private requestCount = 0;
 
   constructor(opts: BiliHttpOptions) {
-    this.cookie = opts.cookie;
+    this.cookieSource = opts.cookie;
     this.logger = opts.logger;
     this.userAgent = opts.userAgent ?? DEFAULT_UA;
     this.readIntervalMs = opts.readIntervalMs ?? 1500;
@@ -124,6 +140,11 @@ export class BiliHttp implements Transport {
     this.now = opts.now ?? (() => Date.now());
     this.sleep = opts.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     if (opts.onRisk) this.onRisk = opts.onRisk;
+  }
+
+  /** 当前 cookie（登录后可能变）。 */
+  cookie(): string {
+    return typeof this.cookieSource === 'string' ? this.cookieSource : this.cookieSource();
   }
 
   useSigner(provider: WbiProvider): void {
@@ -159,6 +180,11 @@ export class BiliHttp implements Transport {
     return this.exchange(req);
   }
 
+  /** 完整响应（状态码 + 响应头 + body），扫码登录要用它读 Set-Cookie。 */
+  async raw(req: TransportRequest): Promise<Result<RawResponse>> {
+    return this.exchangeRaw(req);
+  }
+
   /**
    * 真正的网络交互：**先签名，再排队限速发请求**。
    *
@@ -166,8 +192,13 @@ export class BiliHttp implements Transport {
    * 如果签名发生在队列内部，nav 会在队列里等自己 → 直接死锁（真接口冒烟时踩到过）。
    */
   private async exchange(req: TransportRequest): Promise<Result<string>> {
+    const outcome = await this.exchangeRaw(req);
+    return outcome.ok ? { ok: true, data: outcome.data.body } : outcome;
+  }
+
+  private async exchangeRaw(req: TransportRequest): Promise<Result<RawResponse>> {
     const attempts = req.noRetry ? 1 : this.retries + 1;
-    let lastError: Result<string> | null = null;
+    let lastError: Result<RawResponse> | null = null;
 
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       const url = await this.buildUrl(req);
@@ -199,20 +230,22 @@ export class BiliHttp implements Transport {
   }
 
   /** 单次请求（已持有队列）：限速 → fetch → 错误分类。 */
-  private async fetchOnce(url: string, req: TransportRequest): Promise<Result<string>> {
+  private async fetchOnce(url: string, req: TransportRequest): Promise<Result<RawResponse>> {
     await this.throttle();
     try {
       const res = await this.fetchImpl(url, {
         method: req.method ?? 'GET',
         headers: this.headers(req),
         signal: AbortSignal.timeout(req.timeoutMs ?? this.timeoutMs),
+        ...(req.redirect ? { redirect: req.redirect } : {}),
         ...(req.form ? { body: new URLSearchParams(req.form).toString() } : {}),
       });
       this.requestCount += 1;
       this.lastRequestAt = this.now();
 
       const body = await res.text();
-      if (!res.ok) {
+      const redirect = res.status >= 300 && res.status < 400;
+      if (!res.ok && !redirect) {
         return {
           ok: false,
           error: {
@@ -223,7 +256,7 @@ export class BiliHttp implements Transport {
           },
         };
       }
-      return { ok: true, data: body };
+      return { ok: true, data: toRawResponse(res, body) };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return { ok: false, error: { kind: 'network', code: 'network', message: `请求失败：${message}` } };
@@ -255,7 +288,8 @@ export class BiliHttp implements Transport {
       'accept-language': 'zh-CN,zh;q=0.9',
       referer: req.referer ?? 'https://www.bilibili.com/',
     };
-    if (this.cookie) headers.cookie = this.cookie;
+    const cookie = this.cookie();
+    if (cookie && !req.withoutCookie) headers.cookie = cookie;
     if (req.method === 'POST') {
       headers['content-type'] = 'application/x-www-form-urlencoded';
       headers.origin = 'https://www.bilibili.com';
@@ -328,6 +362,24 @@ function describeStatus(status: number): string {
   if (status === 404) return '不存在';
   if (status >= 500) return '服务端错误';
   return '请求失败';
+}
+
+/** Response → 我们的 RawResponse（含逐条 Set-Cookie）。 */
+function toRawResponse(res: ResponseLike, body: string): RawResponse {
+  const headers: Record<string, string> = {};
+  const rawHeaders = res.headers as unknown as { forEach?: (cb: (value: string, key: string) => void) => void };
+  rawHeaders.forEach?.((value, key) => {
+    headers[key.toLowerCase()] = value;
+  });
+
+  let setCookies: string[] = [];
+  if (typeof res.headers.getSetCookie === 'function') {
+    setCookies = res.headers.getSetCookie();
+  } else {
+    const single = res.headers.get('set-cookie');
+    if (single) setCookies = [single];
+  }
+  return { status: res.status, headers, setCookies, body };
 }
 
 /** 日志里只留 host + path，别把带签名的 query 全打出来。 */

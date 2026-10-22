@@ -1,4 +1,4 @@
-# 架构说明（M0 + M1 现状）
+# 架构说明（M0 + M1 + M2 现状）
 
 这一页写给「接手改代码的人」：模块边界、一次醒来的数据流、以及几条不能破坏的不变式。
 需求与验收标准在 [`../独立程序-需求文档.md`](../独立程序-需求文档.md)，这里不重复。
@@ -6,6 +6,9 @@
 ## 分层
 
 ```
+浏览器面板（src/ui/：index.html + app.js + style.css，原生 JS，无构建、无 CDN）
+        │ 只调 127.0.0.1 的 /api/*，Bearer + CSRF
+        ▼
 壳 shell（可选）shell/BiliWhaleTray.cs  ── 只通过 127.0.0.1 HTTP + runtime.json 与内核说话
         │
         ▼
@@ -13,7 +16,8 @@ CLI (src/cli.ts) ── serve（守护进程）/ run（手动一轮）/ doctor /
   └─ bootstrap（src/bootstrap.ts）：路径 / 日志 / 配置 / 凭据 / 账本 / 模型 / B 站客户端
         │
         ▼
-daemon（src/daemon/）── 单实例 · 调度循环 · 控制接口 · 心跳 · 优雅退出
+daemon（src/daemon/）── 单实例 · 调度循环 · 心跳 · 优雅退出
+   ├─ daemon/api.ts         面板接口实现（状态/配置/账号/报告/日记/体检/诊断）
    ├─ daemon/scheduler.ts   把 scheduler 的判定落到状态与执行器（含「重算后立刻再判一次」）
    ├─ daemon/runner.ts      同一时刻只跑一轮；定时与手动撞车时后来者被拒
    ├─ scheduler/plan.ts     今日计划生成（纯函数）：窗口/跳过/硬上限/跨零点
@@ -21,7 +25,12 @@ daemon（src/daemon/）── 单实例 · 调度循环 · 控制接口 · 心�
    ├─ lifecycle/lock.ts     单实例锁（pid + 启动时间，陈旧锁自动清理）
    ├─ lifecycle/runtime.ts  runtime.json（端口+token）与 heartbeat.json
    ├─ lifecycle/autostart.ts 开机自启（HKCU Run，失败回落 Startup 文件夹）
-   └─ http/server.ts + page.ts  本地控制接口与极简状态页
+   ├─ http/server.ts        本地控制接口 + 静态资源（白名单、防穿越、CSP）
+   ├─ doctor.ts             体检（CLI 与面板共用）
+   ├─ diagnostics.ts        脱敏诊断包
+   ├─ account/login.ts      扫码登录 / cookie 粘贴 / nav 复核
+   ├─ qr/encoder.ts         二维码编码器（自己写，零依赖）
+   └─ config/describe.ts    配置元数据（面板表单由它渲染）
         │
         ▼
 orchestrator/round.ts  ── 一轮的相位机（唯一写文件、唯一记账）
@@ -39,7 +48,7 @@ orchestrator/round.ts  ── 一轮的相位机（唯一写文件、唯一记�
    ├─ llm/client.ts                DeepSeek 适配（唯一知道 API 形状的文件）
    ├─ llm/discovery.ts             模型发现优先级
    │
-   ├─ bili/http.ts                 串行限速、header、错误分类、重试
+   ├─ bili/http.ts                 串行限速、header、错误分类、重试、raw（读 Set-Cookie）
    ├─ bili/wbi.ts                  WBI 签名（纯函数）
    ├─ bili/api.ts                  接口 → 领域类型（容错映射）
    │
@@ -47,8 +56,28 @@ orchestrator/round.ts  ── 一轮的相位机（唯一写文件、唯一记�
    └─ shared/*                     日志脱敏、原子写、时间、错误分类、领域类型
 ```
 
-依赖方向是单向的：`shell → http → daemon → orchestrator → agent → llm/bili → state/shared`。
+依赖方向是单向的：`ui → http → daemon → orchestrator → agent → llm/bili → state/shared`。
 反向依赖（比如 bili 层 import orchestrator）属破坏性改动，不要做。
+
+## 本地接口（M2 全量）
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| GET | `/api/session` | 拿 CSRF token（写操作要用）+ 版本 |
+| GET | `/api/health` `/api/status` `/api/logs` | 存活 / 状态摘要 / 事件流（limit 夹 1..500） |
+| POST | `/api/run` `/api/pause` `/api/resume` `/api/shutdown` | 动作 |
+| GET/POST | `/api/autostart` | 查 / 开 / 关开机自启 |
+| GET/PUT | `/api/config` | 读配置（带分组元数据）/ 保存（校验→原子写→必要时重算计划） |
+| POST | `/api/config/validate` `/api/config/import` `/api/config/reset` | 只校验 / 导入 / 恢复默认 |
+| GET | `/api/config/export` | 下载配置（不含凭据） |
+| GET | `/api/models` `/api/doctor` `/api/diag` | 模型与预算 / 体检 / 脱敏诊断包 |
+| GET | `/api/account` | 登录态、UID、凭据指纹（不回显原值） |
+| POST | `/api/account/qr` `/api/account/cookie` `/api/account/verify` `/api/account/logout` | 扫码 / 粘贴 / 复核 / 退出 |
+| GET | `/api/account/qr/poll?key=` | 扫码状态轮询 |
+| GET | `/api/reports` `/api/reports/:date` `/api/diaries` `/api/diaries/:kind/:date` | 报告与两本日记 |
+| GET | `/` `/app.js` `/style.css` | 面板静态资源 |
+
+不在这张表里的路径一律 404；缺 handler 的面板接口回 501（方便分阶段上线）。
 
 ## 常驻形态（M1）
 
@@ -97,6 +126,11 @@ Phase 10 收尾     token 记账 / run 记录 / 事件    → state.noteRun + ad
 13. **同一时刻只跑一轮**：`RoundRunner` 里已有一轮在跑时，定时触发会被跳过（记事件），手动触发返回 409。
 14. **控制接口只在本机**：只绑 `127.0.0.1`，必须带 token，校验 Host，不返回 CORS 头。
 15. **壳不碰业务数据**：托盘只调 HTTP、只读 `runtime.json`；它不知道 candidates/quota/diary 是什么。
+16. **写操作要 CSRF**：POST/PUT 除 Bearer 外还要 `x-csrf-token`；`/api/session` 是唯一的例外。
+17. **面板离线自洽**：`src/ui/` 不引任何外部地址（只允许 SVG 命名空间）、不含内联脚本（CSP 会拦）、不直接访问 B 站。
+18. **配置只有一个来源**：面板渲染字段、校验、默认值全部来自 `config/spec.ts`；面板里不写死任何字段名或默认值。
+19. **凭据不进导出物**：`/api/config/export` 与 `/api/diag` 都不含 cookie / apiKey（诊断包最后统一过 `redactDeep`）。
+20. **登录态可验证**：扫码或粘贴之后必须调一次 `nav` 才算数；验不过就如实说「没验过」，不许假装已登录。
 
 ## 想加东西时改哪里
 
@@ -126,3 +160,12 @@ Phase 10 收尾     token 记账 / run 记录 / 事件    → state.noteRun + ad
 - **`.ps1` 反过来必须有 BOM**：PowerShell 5.1 没有 BOM 就按 ANSI（GBK）读脚本，中文注释会把引号配对搞乱、直接语法错误。两条约定都有不变式测试守着。
 - **托盘用 C# 5 写**：`csc.exe`（.NET Framework 4.8 自带）只支持 C# 5，所以不能用字符串插值、`?.`、`nameof`。好处是零工具链：`npm run tray:build` 就能出 exe。
 - **自启双后端**：注册表是文档首选，但受限环境下 `reg.exe` 可能起不来（连 spawn 都会 EPERM）；回落写 Startup 文件夹的 `.cmd`，两个后端互相清理，状态里如实报告用了哪个。
+- **面板不用框架、不打包**：`src/ui/` 三个文件（html/js/css）直接由内核静态服务，`script-src 'self'`，没有内联脚本、没有 CDN、没有构建步骤。代价是没有组件化；好处是「离线可用」这条硬要求白拿，且 M5 打包时把三个文件内联进去就行。
+- **设置页不写死字段**：表单完全由 `config/describe.ts` 从 `config/spec.ts` 生成（20 组 96 字段）。加一个配置项只改 schema，面板自动出现；不变式测试守着「每个字段都有 label 与默认值」。
+- **写操作要 CSRF**：token 放在 URL 里会被浏览历史/截图带走，而 `127.0.0.1` 上的服务对同机进程是不设防的。所以：GET 只读；POST/PUT 额外校验 `x-csrf-token`（`/api/session` 发放，内存里存，重启即换）；再加 Host 校验与「不返回 CORS 头」。
+- **静态资源走白名单**：只允许 `.html/.js/.css/.svg/.png/.ico/.json`，并且解析后的绝对路径必须落在 `src/ui` 里；URL 规范化的 `..` 折叠 + 我们自己的 `..` 检查是双保险（有测试）。
+- **二维码自己实现**：需求文档要求「纯 JS 生成，不依赖 Python qrcode」。写了个只做字节模式 + 版本 1–10 的编码器（约 600 行含表），**用外部参照逐模块对拍**（v1–v6、L/M/Q/H 全 diff=0），对拍结果冻结成夹具，防止以后改坏。
+- **登录凭据只能从响应头拿**：扫码成功后 B 站把 `Set-Cookie` 挂在 302 上，`fetch` 默认跟随重定向就会丢掉；所以 `raw()` 走 `redirect: 'manual'`，并把 3xx 当成功（body 可能为空）。
+- **cookie 是取值函数而不是常量**：`BiliHttp` 里 `cookie: string | (() => string)`，登录成功后 `secrets` 一变，下一次请求就带新 cookie，不需要重建客户端。
+- **体检只有一份实现**：`src/doctor.ts` 同时给 CLI 与 `/api/doctor` 用，避免「命令行说没事、面板说有事」这种最烦人的不一致。
+- **诊断包脱敏后才出网**：`buildDiagBundle` 最后统一过 `redactDeep`；测试里塞一个假 cookie 与假 key，断言包里一个字节都不出现。日记与报告只统计文件数，不打包正文。

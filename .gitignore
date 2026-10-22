@@ -19,6 +19,9 @@ data/
 secrets.json
 runtime.json
 
+# 临时文件（提交信息草稿之类）
+*.tmp
+
 # 日志与临时
 *.log
 tmp/

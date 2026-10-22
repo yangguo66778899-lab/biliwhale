@@ -1,14 +1,14 @@
 /**
- * 守护进程（`serve`）：作息 + 本地控制接口 + 心跳 + 单实例。
+ * 守护进程（`serve`）：作息 + 本地面板 + 心跳 + 单实例。
  *
  * 职责：
  *   - 抢单实例锁，抢不到就告诉调用方「已有实例，端口是多少」，不硬起第二个；
- *   - 起本地 HTTP（127.0.0.1 + token），把端口与 token 写进 runtime.json 给托盘握手；
+ *   - 起本地 HTTP（127.0.0.1 + token），把端口与 token 写进 runtime.json 给托盘/面板握手；
  *   - 每 30 秒 tick 一次作息，到点就跑一轮（跳过槽位只写日记）；
  *   - 每 30 秒写心跳，壳与诊断据此判断存活；
  *   - 监听 config.json 变化：schedule 变了就让调度器重算，其它配置下一次调用生效；
  *   - 收到 SIGINT/SIGTERM/面板「退出」时优雅收尾：等当前一轮跑到安全点、落盘、放锁。
- * 不做什么：不弹窗、不弹托盘（壳的事）、不实现业务逻辑。
+ * 不做什么：不弹窗、不弹托盘（壳的事）、不实现业务逻辑（在 daemon/api.ts 与各服务里）。
  */
 
 import fs from 'node:fs';
@@ -21,14 +21,14 @@ import type { LockInfo } from '../lifecycle/lock.ts';
 import { clearRuntime, newToken, writeHeartbeat, writeRuntime } from '../lifecycle/runtime.ts';
 import { AutostartService } from '../lifecycle/autostart.ts';
 import { ControlServer } from '../http/server.ts';
-import type { AutostartPayload, ControlHandlers, HealthPayload, StatusPayload } from '../http/server.ts';
-import type { RandomSource } from '../scheduler/random.ts';
 import { RoundRunner } from './runner.ts';
-import { Scheduler, scheduleConfig, toDayPlan } from './scheduler.ts';
+import { Scheduler, toDayPlan } from './scheduler.ts';
+import { createHandlers } from './api.ts';
+import { LoginService } from '../account/login.ts';
 import { summarizePlan, pendingSlots } from '../scheduler/tick.ts';
-import { decideSilence } from '../state/ledgers.ts';
-import { localDate, localIso } from '../shared/time.ts';
+import { localIso } from '../shared/time.ts';
 import { humanError } from '../shared/errors.ts';
+import type { RandomSource } from '../scheduler/random.ts';
 
 export interface DaemonOptions {
   dataDir?: string;
@@ -83,101 +83,33 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonStart> {
   });
   const token = newToken();
   const cfg = ctx.config.get();
-
   const autostart = new AutostartService({ command: resolveTrayCommand(), logger });
+  const login = new LoginService({
+    http: ctx.transport,
+    secrets: ctx.secrets,
+    logger,
+    verify: async () => {
+      const nav = await ctx.api.nav();
+      if (!nav.ok) return nav;
+      return { ok: true, data: { isLogin: nav.data.isLogin, mid: nav.data.mid, uname: nav.data.uname } };
+    },
+  });
 
-  const handlers: ControlHandlers = {
-    health(): HealthPayload {
-      const state = ctx.state.get();
-      return {
-        ok: true,
-        version: opts.version,
-        pid: process.pid,
-        uptimeSec: Math.round((Date.now() - startedAt) / 1000),
-        running: runner.isRunning(),
-        paused: state.paused,
-        nextWakeAt: isoOfNextWake(),
-        lastRunStatus: state.lastRunStatus,
-        lastError: scheduler.error,
-      };
-    },
-    status(): StatusPayload {
-      const state = ctx.state.get();
-      const current = ctx.config.get();
-      const plan = state.today ? toDayPlan(state.today) : null;
-      const last = ctx.runs.last();
-      const silence = decideSilence(ctx.feedback.silenceDays(), current.share);
-      const today = localDate();
-      const account = ctx.secrets.accountHint();
-      const warnings: string[] = [];
-      if (!ctx.secrets.hasCookie()) warnings.push('没有 B 站 cookie：字幕读不到');
-      if (state.paused) warnings.push('已暂停自动唤醒');
-      if (scheduler.error) warnings.push(`调度最近一次出错：${scheduler.error}`);
-
-      return {
-        scheduler: {
-          plan: summarizePlan(plan),
-          paused: state.paused,
-          nextWakeAt: isoOfNextWake(),
-          planSource: state.today?.reason ?? null,
-        },
-        lastRun: last
-          ? { id: last.id, status: last.status, endedAt: last.endedAt, tokens: last.model.promptTokens + last.model.completionTokens }
-          : null,
-        today: {
-          wakes: state.today?.wakes ?? 0,
-          targetWakes: state.today?.targetWakes ?? 0,
-          shares: ctx.quota.sharesOn(today),
-          shareCap: Math.min(silence.shareCap, current.share.dailyCap),
-          tokens: state.budget.tokens,
-          costCny: state.budget.costCny,
-        },
-        account: { loggedIn: account.hasCookie, ...(account.uname ? { name: account.uname } : {}), ...(account.mid ? { mid: account.mid } : {}) },
-        model: {
-          configured: ctx.configuredModel,
-          actual: ctx.llm.model,
-          discoveredAt: state.modelCache?.discoveredAt ?? null,
-        },
-        warnings,
-      };
-    },
-    logs(limit: number): unknown[] {
-      return logger.recentEvents(limit);
-    },
-    async run(options: { dryRun: boolean }): Promise<{ ok: boolean; message: string }> {
-      const result = runner.runManual(options);
-      logger.event('manual-run', result.message, { level: result.ok ? 'info' : 'warn', target: 'daemon' });
-      return result;
-    },
-    pause(): { ok: boolean; message: string } {
-      ctx.state.setPaused(true, localIso());
-      logger.event('pause', '已暂停自动唤醒（手动仍可跑）', { target: 'daemon' });
-      return { ok: true, message: '已暂停自动唤醒；手动「现在跑一轮」仍然可用' };
-    },
-    resume(): { ok: boolean; message: string } {
-      ctx.state.setPaused(false, localIso());
-      scheduler.invalidate();
-      logger.event('resume', '已恢复自动唤醒', { target: 'daemon' });
-      return { ok: true, message: '已恢复；下一次 tick 会重算计划' };
-    },
-    async autostart(enabled?: boolean): Promise<AutostartPayload> {
-      try {
-        if (enabled === undefined) return await autostart.status();
-        return enabled ? await autostart.enable() : await autostart.disable();
-      } catch (err) {
-        const warning = humanError(err);
-        logger.warn('autostart', warning);
-        return { enabled: false, mechanism: null, command: null, warning };
-      }
-    },
-    shutdown(): { ok: boolean; message: string } {
-      logger.info('daemon', '收到退出请求');
-      setTimeout(() => {
-        void shutdown('api').catch((err: unknown) => logger.error('daemon', `退出失败：${humanError(err)}`));
-      }, 50);
-      return { ok: true, message: '正在退出' };
-    },
-  };
+  let stopImpl: (() => void) | null = null;
+  const handlers = createHandlers({
+    ctx,
+    runner,
+    scheduler,
+    autostart,
+    login,
+    version: opts.version,
+    startedAt,
+    ...(opts.dataDir ? { dataDir: opts.dataDir } : {}),
+    trayExe: resolveTrayExe(),
+    fixtures: opts.fixtures ?? false,
+    mockModel: opts.mockModel ?? false,
+    shutdown: () => stopImpl?.(),
+  });
 
   const server = new ControlServer({
     handlers,
@@ -202,6 +134,11 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonStart> {
   const tickMs = opts.tickMs ?? DEFAULT_TICK_MS;
   const heartbeatMs = opts.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
 
+  const isoOfNextWake = (): string | null => {
+    const ms = ctx.state.nextWakeAtMs();
+    return ms === null ? null : localIso(new Date(ms));
+  };
+
   const heartbeat = (): void => {
     const state = ctx.state.get();
     writeHeartbeat(paths, {
@@ -216,23 +153,16 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonStart> {
     });
   };
 
-  function isoOfNextWake(): string | null {
-    const ms = ctx.state.nextWakeAtMs();
-    return ms === null ? null : localIso(new Date(ms));
-  }
-
   // ---- 配置热更新：schedule 变了就重算，其它字段下一次调用生效 ----
   let watchTimer: NodeJS.Timeout | null = null;
-  const configFile = paths.config;
   const onConfigChanged = (): void => {
     if (watchTimer) clearTimeout(watchTimer);
     watchTimer = setTimeout(() => {
       try {
-        const before = JSON.stringify(scheduleConfig(ctx.config.get()));
+        const before = JSON.stringify(ctx.config.get().schedule);
         ctx.config.load();
-        const after = JSON.stringify(scheduleConfig(ctx.config.get()));
-        const current = ctx.config.get();
-        logger.setLevel(current.logging.level);
+        const after = JSON.stringify(ctx.config.get().schedule);
+        logger.setLevel(ctx.config.get().logging.level);
         if (before !== after) {
           scheduler.invalidate();
           logger.info('daemon', '检测到 schedule 变化，已让调度器重算');
@@ -247,7 +177,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonStart> {
 
   let watcher: fs.FSWatcher | null = null;
   try {
-    watcher = fs.watch(configFile, { persistent: false }, () => onConfigChanged());
+    watcher = fs.watch(paths.config, { persistent: false }, () => onConfigChanged());
   } catch (err) {
     logger.warn('daemon', `配置文件监听没装成（改配置需要重启）：${humanError(err)}`);
   }
@@ -271,13 +201,13 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonStart> {
       await server.stop();
       clearRuntime(paths);
       lock.release();
-      heartbeatCleared();
+      clearHeartbeat();
       logger.info('daemon', '已退出');
     })();
     return stopping;
   }
 
-  function heartbeatCleared(): void {
+  function clearHeartbeat(): void {
     try {
       fs.rmSync(paths.heartbeat, { force: true });
       fs.rmSync(`${paths.heartbeat}.bak`, { force: true });
@@ -285,6 +215,12 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonStart> {
       /* 删不掉无所谓，下次启动会覆盖 */
     }
   }
+
+  stopImpl = () => {
+    setTimeout(() => {
+      void shutdown('api').catch((err: unknown) => logger.error('daemon', `退出失败：${humanError(err)}`));
+    }, 50);
+  };
 
   const onSignal = (signal: string): void => {
     void shutdown(signal).then(() => process.exit(0));

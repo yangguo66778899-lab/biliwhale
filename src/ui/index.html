@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>BiliWhale</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <span class="logo">BiliWhale</span>
+    <span class="ver" id="version">—</span>
+  </div>
+  <nav class="tabs" id="tabs">
+    <a href="#/overview" data-tab="overview">概览</a>
+    <a href="#/settings" data-tab="settings">设置</a>
+    <a href="#/account" data-tab="account">账号</a>
+    <a href="#/reports" data-tab="reports">报告</a>
+    <a href="#/diaries" data-tab="diaries">日记</a>
+    <a href="#/logs" data-tab="logs">日志</a>
+    <a href="#/about" data-tab="about">关于</a>
+  </nav>
+  <div class="top-right">
+    <span id="pill" class="pill">连接中…</span>
+  </div>
+</header>
+
+<main id="main">
+  <section id="panel-overview" class="panel"></section>
+  <section id="panel-settings" class="panel"></section>
+  <section id="panel-account" class="panel"></section>
+  <section id="panel-reports" class="panel"></section>
+  <section id="panel-diaries" class="panel"></section>
+  <section id="panel-logs" class="panel"></section>
+  <section id="panel-about" class="panel"></section>
+</main>
+
+<div id="toast" class="toast" hidden></div>
+<script src="/app.js"></script>
+</body>
+</html>

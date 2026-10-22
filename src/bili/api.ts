@@ -274,7 +274,8 @@ export class BiliApi implements WbiProvider {
 /* ---------- 工厂：把 http 与 api 接起来（api 同时是 http 的签名器） ---------- */
 
 export interface CreateBiliOptions {
-  cookie: string;
+  /** 固定 cookie，或每次读一次的取值函数（登录后换 cookie 不必重建客户端）。 */
+  cookie: string | (() => string);
   logger: Logger;
   readIntervalMs?: number;
   timeoutMs?: number;

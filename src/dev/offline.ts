@@ -38,6 +38,7 @@ export interface OfflineOptions {
 
 export interface OfflineStack {
   api: BiliApi;
+  transport: Transport;
   llm: LlmClient;
   /** 脚本化模型一共被调了几次（测试断言用）。 */
   llmCalls: () => number;
@@ -63,7 +64,7 @@ export function createOfflineStack(opts: OfflineOptions): OfflineStack {
     fetchImpl: scripted.fetchImpl,
     sleep: async () => undefined,
   });
-  return { api, llm, llmCalls: scripted.calls };
+  return { api, transport, llm, llmCalls: scripted.calls };
 }
 
 /** 夹具路由：URL 里包含 match 里所有子串即命中。 */
