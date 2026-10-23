@@ -604,7 +604,7 @@ export interface CreateBiliOptions {
   readIntervalMs?: number;
   timeoutMs?: number;
   retries?: number;
-  onRisk?: (message: string) => void;
+  onRisk?: (message: string, info: { method: string }) => void;
   fetchImpl?: (input: string, init?: RequestInit) => Promise<Response>;
 }
 

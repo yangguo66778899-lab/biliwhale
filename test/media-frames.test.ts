@@ -71,7 +71,14 @@ interface Harness {
   calls: string[][];
 }
 
-function harness(over: { media?: Record<string, unknown>; target?: Partial<VisualTarget>; videoFile?: boolean; downloadFails?: boolean; playUrlFails?: boolean } = {}): Harness {
+function harness(over: {
+  media?: Record<string, unknown>;
+  target?: Partial<VisualTarget>;
+  videoFile?: boolean;
+  downloadFails?: boolean;
+  playUrlFails?: boolean;
+  playUrlMessage?: string;
+} = {}): Harness {
   const dir = tmpDir('media');
   const paths = resolvePaths({ dataDir: dir });
   ensureLayout(paths);
@@ -84,7 +91,7 @@ function harness(over: { media?: Record<string, unknown>; target?: Partial<Visua
     logger: quietLogger(dir),
     playUrl: async () =>
       over.playUrlFails
-        ? { ok: false as const, error: { kind: 'network' as const, code: 500, message: '接口抽风' } }
+        ? { ok: false as const, error: { kind: 'risk' as const, code: -412, message: over.playUrlMessage ?? '接口抽风' } }
         : { ok: true as const, data: { url: 'http://example.com/v.mp4' } },
     overrides: {
       ffmpegPath: 'ffmpeg' as string | null,
@@ -161,6 +168,13 @@ test('取不到播放地址 / 下载失败：都降级，不让整轮失败', as
   const a = await prepareVisuals(noUrl.deps, TARGET);
   assert.equal(a.status, 'skipped');
   assert.match(a.note, /没看画面：取不到视频地址/);
+
+  // 412 是「账号被限流」，不是「这条视频没地址」：措辞要让人看懂该怎么办
+  const limited = harness({ playUrlFails: true, playUrlMessage: 'HTTP 412（被限流，需要冷却）', videoFile: false });
+  const c = await prepareVisuals(limited.deps, TARGET);
+  assert.equal(c.status, 'skipped');
+  assert.match(c.note, /B 站限流了/);
+  assert.match(c.note, /这轮按纯文本跑/);
 
   const broken = harness({ downloadFails: true, videoFile: false });
   const b = await prepareVisuals(broken.deps, TARGET);

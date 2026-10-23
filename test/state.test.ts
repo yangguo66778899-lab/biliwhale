@@ -126,3 +126,22 @@ test('AppStateStore 跨天重置预算，累计 token 与失败计数', () => { 
   assert.equal(store.inRiskCooldown(new Date('2026-10-21T23:00:00+08:00')), true);
   assert.equal(store.inRiskCooldown(new Date('2026-10-22T00:00:00+08:00')), false);
 });
+
+test('读冷却与写冷却分开：读被限流不该把写操作一起冻住', () => {
+  // 真实事故（2026-10-22）：开了「看画面」→ playurl 拿到 412 → 以前读 412 也写 45 分钟写冷却
+  // → 那一轮挑中了、文案也写好了，却发不出去。现在读 412 只写 readCooldownUntil。
+  const dir = tmpDir('state-read-cooldown');
+  const store = new AppStateStore(path.join(dir, 'state.json'), quietLogger(dir));
+
+  store.setReadCooldown('2026-10-22T23:10:00+08:00');
+  const inside = new Date('2026-10-22T23:00:00+08:00');
+  assert.equal(store.inReadCooldown(inside), true, '读冷却期间不该再去读');
+  assert.equal(store.inRiskCooldown(inside), false, '但写操作不该被读冷却挡住');
+  assert.equal(store.readCooldownUntil(), '2026-10-22T23:10:00+08:00');
+  assert.equal(store.inReadCooldown(new Date('2026-10-22T23:11:00+08:00')), false);
+
+  // 写冷却照旧只由写请求设置，两者互不覆盖
+  store.setRiskCooldown('2026-10-22T23:46:00+08:00');
+  assert.equal(store.inRiskCooldown(inside), true);
+  assert.equal(store.riskCooldownUntil(), '2026-10-22T23:46:00+08:00');
+});

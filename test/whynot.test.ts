@@ -48,3 +48,39 @@ test('why-not：私信渠道设的是评论时，说清「不是私信」', () =
   });
   assert.match(lines.find((l) => l.label === '私信分享')?.text ?? '', /不是私信/);
 });
+
+test('why-not：只写结果不写「会做」——被冷却拒绝时给出原因和截止时间', () => {
+  // 2026-10-22 真机报告：同一页「点赞：会点第一条」+「没点赞：风控冷却中」自相矛盾。
+  const lines = buildWhyNot({
+    config: cfg({ like: { enabled: true }, share: { enabled: true, via: 'comment' } }),
+    result: { selected: [{ bvid: 'BV1x', score: 14 }], favorite: null } as never,
+    dmChannelOn: false,
+    dryRun: false,
+    riskCooldownUntil: '2026-10-22T23:46:05+08:00',
+    now: new Date('2026-10-22T22:59:00+08:00'),
+    share: { status: 'denied', deny: ['风控冷却中'], bvid: 'BV1x' },
+    like: { status: 'denied', deny: ['风控冷却中'], bvid: 'BV1x' },
+  });
+
+  const share = lines.find((l) => l.label === '分享')?.text ?? '';
+  const like = lines.find((l) => l.label === '点赞')?.text ?? '';
+  assert.match(share, /没发：风控冷却中/, '这一节必须有「分享」，且写真实结果');
+  assert.match(share, /冷却到 23:46/, '要写冷却到几点，否则用户不知道什么时候恢复');
+  assert.match(like, /没点：风控冷却中/);
+  assert.equal(like.includes('会点'), false, '不许把「会做」当结果写');
+});
+
+test('why-not：成功时写结果；冷却过期后不再补时间', () => {
+  const lines = buildWhyNot({
+    config: cfg({ like: { enabled: true }, share: { enabled: true, via: 'comment' } }),
+    result: { selected: [{ bvid: 'BV1x', score: 14 }], favorite: null } as never,
+    dmChannelOn: false,
+    dryRun: false,
+    riskCooldownUntil: '2026-10-22T23:00:00+08:00',
+    now: new Date('2026-10-23T09:00:00+08:00'),
+    share: { status: 'sent', bvid: 'BV1x' },
+    like: { status: 'sent', bvid: 'BV1x' },
+  });
+  assert.match(lines.find((l) => l.label === '分享')?.text ?? '', /^发 BV1x/);
+  assert.match(lines.find((l) => l.label === '点赞')?.text ?? '', /^点 BV1x/);
+});

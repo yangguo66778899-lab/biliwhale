@@ -231,6 +231,9 @@ function renderShareAttempt(lines: string[], attempt: ShareAttemptView): void {
   }
   if (attempt.status === 'sent' || attempt.status === 'held' || attempt.status === 'unverified' || attempt.status === 'dry_run') {
     lines.push(`- 文案：${attempt.content}`);
+  } else if (attempt.content.trim().length > 0) {
+    // 被拒也把写好的文案写出来：用户有权知道她本来打算说什么
+    lines.push(`- 本来会发：${attempt.content}`);
   }
 }
 
@@ -296,8 +299,12 @@ export function skipReasonText(reason: string): string {
       return '工具失败';
     case 'too_old':
       return '太旧';
+    // 「其它」不是理由。模型用 other 时最常表达的是「够阈值但这一轮挑了别的」——
+    // 照实这么说，别让用户去猜（2026-10-22 报告里两条 10/11 分的条目就卡在这）。
+    case 'other':
+      return '没选它（这轮挑了别的）';
     default:
-      return '其它';
+      return '没选它';
   }
 }
 

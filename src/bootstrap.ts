@@ -94,12 +94,24 @@ export async function bootstrap(opts: BootstrapOptions = {}): Promise<AppContext
   const recovered = runs.recoverInterrupted();
   if (recovered.length > 0) logger.warn('core', `恢复了 ${recovered.length} 条上次未完成的运行记录`);
 
-  // 撞风控 → 写冷却时间（编排器据此拒绝写操作）
-  const onRisk = (message: string): void => {
-    const until = new Date(Date.now() + current.safety.riskCooldownMin * 60_000);
-    state.setRiskCooldown(localIso(until));
-    logger.error('bili', `撞风控：${message}，已冷却到 ${localIso(until)}`);
-    logger.event('risk', `撞风控，冷却 ${current.safety.riskCooldownMin} 分钟`, { level: 'error' });
+  // 撞风控：
+  //   - 写请求（POST）→ 45 分钟写冷却（这是真的该停手）；
+  //   - 读请求（GET）→ 只写「读冷却」，**不动写冷却**。理由：看画面/字幕这种可选读吃一次 412，
+  //     不该让整轮挑中了却发不出去（2026-10-22 真机事故）。写请求自己撞了 412 会再进写冷却。
+  const READ_RISK_COOLDOWN_MIN = 10;
+  const onRisk = (message: string, info: { method: string }): void => {
+    const isWrite = String(info?.method ?? 'GET').toUpperCase() === 'POST';
+    if (isWrite) {
+      const until = new Date(Date.now() + current.safety.riskCooldownMin * 60_000);
+      state.setRiskCooldown(localIso(until));
+      logger.error('bili', `写请求撞风控：${message}，已冷却到 ${localIso(until)}`);
+      logger.event('risk', `写请求撞风控，冷却 ${current.safety.riskCooldownMin} 分钟`, { level: 'error' });
+      return;
+    }
+    const until = new Date(Date.now() + READ_RISK_COOLDOWN_MIN * 60_000);
+    state.setReadCooldown(localIso(until));
+    logger.warn('bili', `读请求被限流：${message}，读冷却到 ${localIso(until)}（写操作不受影响）`);
+    logger.event('risk', `读请求被限流，读冷却 ${READ_RISK_COOLDOWN_MIN} 分钟（不影响写）`, { level: 'warn' });
   };
 
   let api: BiliApi;

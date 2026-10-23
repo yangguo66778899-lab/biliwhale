@@ -179,7 +179,10 @@ export async function prepareVisuals(deps: VisualDeps, target: VisualTarget): Pr
     if (ownsVideo) {
       const info = await deps.playUrl(target.bvid, target.cid);
       if (!info.ok) {
-        return skipped(`没看画面：取不到视频地址（${info.error.message}）`);
+        const raw = info.error.message;
+        // 412 是「账号被限流」，不是「这条视频没地址」——措辞要让人看懂该怎么办
+        const reason = /412|限流/.test(raw) ? 'B 站限流了（HTTP 412），这轮按纯文本跑' : `取不到视频地址（${raw}）`;
+        return skipped(`没看画面：${reason}`);
       }
       const url = String(info.data?.url ?? '').trim();
       if (!url) return skipped('没看画面：取不到视频地址（接口没给播放链接）');

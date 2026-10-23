@@ -102,6 +102,26 @@ test('report_md 为空时不留空小节', () => {
   assert.match(section, /### 挑中的/);
 });
 
+test('被闸门拒绝时也写出「本来会发：…」——用户有权知道她打算说什么', () => {  const section = buildReportSection(
+    baseInput({
+      shareDecisions: new Map(),
+      shareAttempts: new Map([
+        [
+          'BV1a0000001',
+          {
+            status: 'denied',
+            content: '@小明 这条剪得真紧，音效踩得准',
+            deny: ['风控冷却中'],
+            notes: [],
+          },
+        ],
+      ]),
+    }),
+  );
+  assert.match(section, /没发：风控冷却中/);
+  assert.match(section, /本来会发：@小明 这条剪得真紧，音效踩得准/);
+});
+
 test('brief 档：一段正文 + 每条一行 + 备注压成一行', () => {
   const section = buildReportSection(baseInput({ level: 'brief' }));
   assert.match(section, /这一轮翻了 5 条/);
@@ -119,4 +139,13 @@ test('off 档：不产出任何报告内容', () => {
 test('挑中的为空时给一句人话，而不是空列表', () => {
   const section = buildReportSection(baseInput({ result: baseResult({ selected: [] }) }));
   assert.match(section, /今天没有值得占你注意力的/);
+});
+
+test('跳过原因不许出现「其它」：模型给 other 也要说清是「没选它」', () => {
+  // 2026-10-22 真机报告里两条 10/11 分的条目显示「· 其它」，用户以为是 bug。
+  const section = buildReportSection(
+    baseInput({ result: baseResult({ skipped: [{ bvid: 'BV1a0000002', reason: 'other', note: '够阈值但让位给最高分那条' }] }) }),
+  );
+  assert.equal(section.includes('· 其它'), false, '「其它」不是理由');
+  assert.match(section, /没选它（这轮挑了别的）/);
 });

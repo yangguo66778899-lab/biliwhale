@@ -62,6 +62,13 @@ export interface AppStateFile {
     totalRuns: number;
   };
   riskCooldownUntil: string | null;
+  /**
+   * 「读」被限流的冷却（HTTP 412 出现在 GET 上时写这里）。
+   * 为什么要和写冷却分开：看画面/字幕这些**可选读**吃一次 412，不应该把整轮写操作全废掉
+   * （真实事故：开了「看画面」→ playurl 412 → 45 分钟写冷却 → 挑中了也发不出去）。
+   * 写请求自己撞 412 时仍走 `riskCooldownUntil`（那是真的该停手）。
+   */
+  readCooldownUntil?: string | null;
 }
 
 export function emptyState(): AppStateFile {
@@ -184,8 +191,28 @@ export class AppStateStore {
     this.update((state) => ({ ...state, riskCooldownUntil: untilIso }));
   }
 
+  /** 写侧冷却截止时间（报告里要写「到 23:46」）。 */
+  riskCooldownUntil(): string | null {
+    return this.store.get().riskCooldownUntil ?? null;
+  }
+
   inRiskCooldown(now: Date = new Date()): boolean {
     const until = this.store.get().riskCooldownUntil;
+    if (!until) return false;
+    return Date.parse(until) > now.getTime();
+  }
+
+  /** 读侧冷却（只影响「要不要再花流量去读」，不影响写）。 */
+  setReadCooldown(untilIso: string | null): void {
+    this.update((state) => ({ ...state, readCooldownUntil: untilIso }));
+  }
+
+  readCooldownUntil(): string | null {
+    return this.store.get().readCooldownUntil ?? null;
+  }
+
+  inReadCooldown(now: Date = new Date()): boolean {
+    const until = this.store.get().readCooldownUntil;
     if (!until) return false;
     return Date.parse(until) > now.getTime();
   }

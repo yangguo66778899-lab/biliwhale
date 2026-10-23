@@ -80,8 +80,8 @@ export interface BiliHttpOptions {
   fetchImpl?: FetchLike;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
-  /** 撞风控时回调（编排器据此写冷却时间）。 */
-  onRisk?: (message: string) => void;
+  /** 撞风控时回调（编排器据此写冷却时间）。method 用来区分「读被限流」和「写撞风控」。 */
+  onRisk?: (message: string, info: { method: string }) => void;
 }
 
 type FetchLike = (input: string, init?: RequestInit) => Promise<ResponseLike>;
@@ -122,7 +122,7 @@ export class BiliHttp implements Transport {
   private readonly fetchImpl: FetchLike;
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
-  private readonly onRisk?: (message: string) => void;
+  private readonly onRisk?: (message: string, info: { method: string }) => void;
   private signer: WbiProvider | null = null;
   private lastRequestAt = 0;
   private requestCount = 0;
@@ -210,7 +210,8 @@ export class BiliHttp implements Transport {
 
       const kind = outcome.error.kind;
       if (kind === 'risk') {
-        this.onRisk?.(outcome.error.message);
+        // 读和写分开记账：读 412（看画面/字幕这类可选读）不该把整轮写操作一起冻住
+        this.onRisk?.(outcome.error.message, { method: req.method ?? 'GET' });
         return outcome;
       }
       if (kind === 'network' || kind === 'rate') {

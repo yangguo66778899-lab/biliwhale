@@ -53,6 +53,7 @@ import { buildDeepPrompt, buildScreenPrompt, clip, pickDeepReads } from './promp
 import { appendNotifyLog, writeArchive, writeDiary, writeReport, videoUrl, skipReasonText } from './writers.ts';
 import { dispatchNotifications } from '../notify/index.ts';
 import { buildWhyNot } from './whynot.ts';
+import type { WhyNotOutcome } from './whynot.ts';
 import { prepareVisuals } from '../media/frames.ts';
 import type { VisualOverrides, VisualResult } from '../media/frames.ts';
 import { buildSystemMessage, buildUserPreamble, loadPromptAssets } from '../agent/prompts.ts';
@@ -134,6 +135,13 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
   let llmCalls = 0;
   /** 看画面的结果（§7.10）：写进 run 记录，只记状态与文件名，不存图片。 */
   let mediaRecord: RunRecord['media'] | undefined;
+  /**
+   * 写操作的**真实结果**：「今天为什么没做」只许写结果，不许写「会做」。
+   * （2026-10-22 真机报告里同一页既写「点赞：会点第一条」又写「没点赞：风控冷却中」。）
+   */
+  let shareOutcome: WhyNotOutcome | null = null;
+  let favOutcome: WhyNotOutcome | null = null;
+  let likeOutcome: WhyNotOutcome | null = null;
 
   const markPhase = (name: string, ms: number, status: PhaseStatus, note?: string): void => {
     phases.push({ name, ms, status, ...(note ? { note } : {}) });
@@ -446,6 +454,10 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
     const phaseVisual = Date.now();
     if (!firstRead) {
       mediaNote = '没看画面：这一轮没有深读的视频';
+    } else if (deps.state.inReadCooldown(now())) {
+      // 读刚被限流过：别再去撞，写操作不受影响（读/写冷却已分开）
+      const until = clockOf(deps.state.readCooldownUntil());
+      mediaNote = `没看画面：B 站刚限流过${until ? `（读冷却到 ${until}）` : ''}，这轮按纯文本跑`;
     } else {
       try {
         visual = await prepareVisuals(
@@ -626,6 +638,15 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
   counts.shared = shareReport.sent;
 
   const shareDecisions = new Map<string, ReturnType<typeof gateShare>>();
+  const primaryShare = shareReport.attempts[0];
+  if (primaryShare) {
+    shareOutcome = {
+      status: primaryShare.status,
+      deny: primaryShare.deny,
+      note: primaryShare.notes.join('；'),
+      bvid: primaryShare.bvid,
+    };
+  }
   for (const attempt of shareReport.attempts) {
     shareDecisions.set(attempt.bvid, {
       allow: attempt.status === 'sent' || attempt.status === 'dry_run' || attempt.status === 'unverified',
@@ -663,6 +684,15 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
         },
       );
       for (const line of fav.notes) notes.push(line);
+      const favAttempt = fav.attempts[0];
+      if (favAttempt) {
+        favOutcome = {
+          status: favAttempt.status,
+          deny: favAttempt.deny,
+          note: favAttempt.notes.join('；'),
+          bvid: favAttempt.bvid,
+        };
+      }
     } catch (err) {
       notes.push(`收藏出错（不影响本轮）：${humanError(err)}`);
     }
@@ -678,6 +708,7 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
           { bvid: first.bvid, aid: videosAid(deepReads, first.bvid), inDeepRead: ctxForResult.deepReadBvids.has(first.bvid), dryRun: effectiveDryRun },
         );
         notes.push(like.ok ? `点赞：${like.note}` : `没点赞：${like.note}`);
+        likeOutcome = { status: like.status, deny: like.deny, note: like.note, bvid: first.bvid };
       }
     } catch (err) {
       notes.push(`点赞出错（不影响本轮）：${humanError(err)}`);
@@ -722,6 +753,11 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
     result,
     dmChannelOn: (cfg.notify.channels ?? []).some((channel) => channel.type === 'dm' && channel.enabled),
     dryRun: effectiveDryRun,
+    ...(shareOutcome ? { share: shareOutcome } : {}),
+    ...(favOutcome ? { fav: favOutcome } : {}),
+    ...(likeOutcome ? { like: likeOutcome } : {}),
+    riskCooldownUntil: deps.state.riskCooldownUntil(),
+    now: now(),
   });
   const reportPath = writeReport(deps.paths, {
     date,
@@ -835,6 +871,13 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
   // ---------------------------------------------------------------- Phase 10 收尾
   const status2: RunRecord['status'] = errors.length === 0 && !resultDegraded ? 'ok' : 'degraded';
   return finish(status2);
+}
+
+/** 把 ISO 时间里的 HH:mm 抠出来（报告里写「冷却到 23:46」用）。 */
+function clockOf(iso: string | null | undefined): string {
+  if (!iso) return '';
+  const match = /T(\d{2}:\d{2})/.exec(iso);
+  return match ? (match[1] ?? '') : '';
 }
 
 /** 从深读结果里拿 aid（写接口要 oid=aid）；取不到就 0，上层会拒绝而不是瞎猜。 */

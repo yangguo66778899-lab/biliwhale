@@ -206,6 +206,9 @@ export async function executeShares(deps: ShareDeps, input: ShareInput): Promise
 
     if (!decision.allow) {
       attempt.deny.push(...decision.deny);
+      // 闸门拒绝时也把模型写好的文案留在 attempt 上：报告要写「本来会发：…」，
+      // 否则用户永远不知道她打算说什么（2026-10-22 真机报告里的缺项）。
+      attempt.content = String(item.share?.text ?? '').trim();
       report.denied += 1;
       notes.push(`没发 ${item.bvid}：${decision.deny.join('；')}`);
       continue;
