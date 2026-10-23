@@ -6,7 +6,7 @@
  */
 
 import type { Config } from '../config/spec.ts';
-import type { Candidate, DeepRead, LightRead, ScreenItem } from '../shared/types.ts';
+import type { Candidate, CommentItem, DeepRead, LightRead, ScreenItem } from '../shared/types.ts';
 import { BILI_EMOJI } from '../shared/biliEmoji.ts';
 
 /** 深读阶段塞进 prompt 的字幕上限（工具里还能要更长的）。 */
@@ -164,27 +164,22 @@ export function buildDeepPrompt(input: {
     ...blocks,
     '# 写东西的口径',
     '',
-    '- **场景**：你是一个刚看完视频的观众，不是来汇报的。评论是「我想说一句」，日记是「我记一下」，都不是交付物。',
-    '- **字数**：下面的上限**不是目标**。一句话、十几个字，只要话说完了就合格；想写长，得有值得写长的细节。',
-    '- **标点**：评论和聊天**末尾不加句号**（问号、省略号、感叹号可以有）；日记正常标点。',
-    `- **表情**：评论可以用 B 站表情码，一条最多 1–2 个，情绪对不上就别用。只能用这些：${BILI_EMOJI.join(' ')}；日记里不用。`,
-    '- **日记不说数据话**：不写「我选了 N 条」「评分 X/20」「阈值」「候选」「token」「分享了几条」——那是账，不是感受。',
+    '- **场景**：你是一个刚看完视频的观众，不是来汇报的。',
+    '- **字数**：上限**不是目标**。一句话、十几个字，只要话说完了就合格；想写长，得有值得写长的细节。',
+    '- 这一轮**不用写评论、不用写日记**：它们各自单开一轮（在那边写）。你在这里只做判断与记录。',
     '',
     '# 本轮任务',
     '',
-    '1. 对上面每条写 `why`（两三句，具体：哪句话/哪个点让你觉得值得）和 `oneliner`（一句话，给分享用）。',
-    `2. 决定分享哪一条：最多一条，只从上面这些里挑，分数要 ≥ ${input.config.share.minScore}/20；决定发就写 \`"channel":"${input.config.share.via}"\`，不发就写 \`"channel":"none"\`。`,
+    '1. 对上面每条写 `why`（两三句，具体：哪句话/哪个点让你觉得值得）和 `oneliner`（一句话）。',
+    `2. 决定分享哪一条：最多一条，只从上面这些里挑，分数要 ≥ ${input.config.share.minScore}/20；决定发就写 \`"channel":"${input.config.share.via}"\`，不发就写 \`"channel":"none"\`（**文案不在这里写**）。`,
     `   ${shareNote}`,
     `3. 不 @ 的评论：${plainNote}`,
     `4. 收藏：${favNote}`,
     `5. ${dynamicNote}`,
-    '6. 写两本日记：',
-    `   - \`diary.public\`（给用户看的）：散文体，可以对「你」说话，必须有具体细节（哪句话、第几分钟、评论区谁说了什么）。**不要写成汇报**。`,
-    '   - `diary.private`（给自己看的）：不加滤镜，必须含「偏好校准」：哪条视频、用户什么反应、下次往哪偏。',
-    '7. `notify` 写一句给用户的通知（一句人话，不是摘要列表）。',
-    '8. `report_md`：这一轮的日报正文（**2–4 段 Markdown**，写给用户看）。讲清「翻了几条、为什么只挑这条 / 为什么一条都没挑」，可以有具体细节；不要写成日记那种第一人称抒情，也不要照抄 `why` 的原句。**不要写发没发、额度、冷却**——那些代码会写。',
-    '9. `notes` 写本轮的异常/降级（没有就写空字符串）。',
-    '10. **不要写「发没发」「为什么没发」「收藏/点赞成没成」**：这些由代码判定、报告里会另外写；你只负责写文案。',
+    '6. `notify` 写一句给用户的通知（一句人话，不是摘要列表）。',
+    '7. `report_md`：这一轮的日报正文（**2–4 段 Markdown**，写给用户看）。讲清「翻了几条、为什么只挑这条 / 为什么一条都没挑」，可以有具体细节；不要写成日记那种第一人称抒情，也不要照抄 `why` 的原句。**不要写发没发、额度、冷却**——那些代码会写。',
+    '8. `notes` 写本轮的异常/降级（没有就写空字符串）。',
+    '9. **不要写「发没发」「为什么没发」「收藏/点赞成没成」**：这些由代码判定、报告里会另外写。',
     '',
     input.dryRun ? '本轮是**只读预演**：即使决定了分享也不会真的发出去，你照常写文案就行（用户要看「本来会发什么」）。' : '',
     '',
@@ -199,13 +194,12 @@ export function buildDeepPrompt(input: {
             why: '两三句',
             oneliner: '一句话',
             share: { channel: 'none', text: '', reason: '' },
-            comment: plainOn ? { want: true, text: '一句不 @ 任何人的评论（可以很短、末尾不加句号）' } : null,
+            comment: plainOn ? { want: true, text: '' } : null,
           },
         ],
         skipped: [{ bvid: 'BV...', reason: 'low_score', note: '' }],
         favorite: input.config.fav.enabled ? { bvid: 'BV...', reason: '为什么留（至少 6 个字）' } : null,
         dynamic: null,
-        diary: { public: '...', private: '...' },
         report_md: '这一轮翻了几条…（2–4 段，写给用户看）',
         notify: '一句话',
         notes: '',
@@ -215,6 +209,7 @@ export function buildDeepPrompt(input: {
     ),
     '```',
     '- `favorite` 要么是 `null`，要么是 `{ bvid, reason }`，且 bvid 必须是本轮深读过的；代码还会二次判断（理由长度、同类说明、每日额度、同视频冷却）。',
+    '- `comment` 只要写 `want`（true/false），**文案不在这里写**；分享文案（`share.text`）也不在这里写，都留给后面单开的「说话」一轮。',
     '- `skipped.reason` 只能取：no_subtitle / low_score / duplicate / irrelevant / tool_error / too_old / other。',
     '- 没有进深读的候选也要出现在 `skipped` 里（用初筛理由）。',
   ]
@@ -228,6 +223,123 @@ export function pickDeepReads(screen: ScreenItem[], limit: number): ScreenItem[]
     .filter((s) => s.score > 0)
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
+}
+
+/* ------------------------------------------------------------------ *
+ * 说话（P3：评论与日记各自单开一轮）
+ *
+ * 为什么单开：以前这些字和「打分/挑中/报告」挤在同一次输出里，模型手上全是评价的草稿，
+ * 写出来的东西就长成评语。单开后这里只放「你刚看完什么」和「你当时想到什么」，
+ * 输出也只有一两句话。
+ *
+ * 提示词本身也要像人说话：不写成「必须包含以下要素」的表格——那会把模型带回填表腔。
+ * ------------------------------------------------------------------ */
+
+export interface CommentPromptInput {
+  /** 挑中的那条视频的原始材料。 */
+  deep: DeepRead;
+  /** 当时为什么停下来（模型自己在深读里写的判断）。 */
+  why: string;
+  oneliner: string;
+  /** 主人的称呼（@ 用）。 */
+  ownerName: string;
+  /** 人设原文（用户写的，可能很短）。 */
+  persona: string;
+  maxChars: number;
+  wantPlain: boolean;
+  wantShare: boolean;
+}
+
+/** 评论（不 @ 给评论区）与 @ 文案：一次调用，两句话，也可以都不说。 */
+export function buildCommentPrompt(input: CommentPromptInput): string {
+  const v = input.deep.video;
+  const lines = input.deep.subtitle
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .slice(0, 8);
+  const comments = input.deep.comments.slice(0, 4);
+
+  return [
+    ...(input.persona.trim() ? ['# 你是', input.persona.trim(), ''] : []),
+    '# 你刚看完这条',
+    `- 标题：${v.title}`,
+    `- UP：${v.owner.name} · 时长 ${Math.round(v.durationSec / 60)} 分钟`,
+    ...(v.desc.trim() ? [`- 简介：${clip(v.desc, 300)}`] : []),
+    ...(lines.length > 0 ? ['- 字幕里你记住的几句：', ...lines.map((line) => `  · ${clip(line, 80)}`)] : ['- 这条没有字幕，你只看了标题、简介和评论']),
+    ...(comments.length > 0
+      ? ['- 评论区里：', ...comments.map((c) => `  · ${c.uname}（${c.like} 赞）：${clip(c.message, 80)}`)]
+      : []),
+    '',
+    '# 当时你想到的',
+    `- ${input.why.trim()}`,
+    `- 一句话：${input.oneliner.trim()}`,
+    '',
+    '# 现在',
+    '你想在评论区说一句吗？想说就说，不想说就留空——留空不扣分。',
+    input.wantShare
+      ? `也想让${input.ownerName}知道的话，就给他留一句（会 @ 他；这句是给一个人看的，可以更随意一点）。`
+      : '这一轮不 @ 任何人。',
+    '',
+    '# 怎么写',
+    '- 写你看到这儿想到什么，不是给这条视频写评语。',
+    '- 一句话也行；不超过 ' + input.maxChars + ' 字；末尾不加句号。',
+    `- 表情想用就用（最常用的是 ${BILI_EMOJI.slice(0, 4).join(' ')}），一条最多两个；不用也正常。`,
+    '- 少用影评腔（剪辑、节奏、信息密度、立意）——除非视频本身就在讲这些。',
+    '- 别编自己经历里的具体人名、地名。',
+    '',
+    '只输出这个 JSON（不说的那个写空字符串）：',
+    '```json',
+    JSON.stringify({ comment: '不 @ 任何人的一句（或空字符串）', share: input.wantShare ? '给主人看的一句（或空字符串）' : '' }, null, 2),
+    '```',
+  ].join('\n');
+}
+
+export interface DiaryPromptInput {
+  date: string;
+  /** 今天看过的（挑中的在前）。 */
+  watched: Array<{ title: string; up: string; oneLine: string; why?: string }>;
+  /** 挑中的那条的原始材料（字幕/热评）：写日记时要能想起具体的东西。 */
+  material?: { title: string; subtitle: string; comments: CommentItem[] };
+  persona: string;
+}
+
+/** 两本日记：一次调用，只输出这两段。 */
+export function buildDiaryPrompt(input: DiaryPromptInput): string {
+  const materials = input.material
+    ? [
+        '# 你想记的那条',
+        `- ${input.material.title}`,
+        ...(input.material.subtitle
+          ? ['- 字幕里你记住的：', ...input.material.subtitle.split('\n').map((l) => l.trim()).filter(Boolean).slice(0, 10).map((l) => `  · ${clip(l, 80)}`)]
+          : []),
+        ...(input.material.comments.length > 0
+          ? ['- 评论区：', ...input.material.comments.slice(0, 3).map((c) => `  · ${c.uname}：${clip(c.message, 80)}`)]
+          : []),
+      ]
+    : [];
+
+  return [
+    ...(input.persona.trim() ? ['# 你是', input.persona.trim(), ''] : []),
+    `# ${input.date} 今天看完的`,
+    ...input.watched.map((item) => `- ${item.title}（${item.up}）：${item.oneLine}`),
+    '',
+    ...materials,
+    '',
+    '# 写两段',
+    '一段给主人看：像晚上想起今天看到的一件事，随手记下来。只有一件事也行，写不完整也行。',
+    '一段给自己看：更直白一点，想到什么写什么。',
+    '',
+    '# 就这样写',
+    '- 别总结，别升华，别下结论。想到哪儿写到哪儿。',
+    '- 别写今天看了几条、几分、候选、素材这类账。',
+    '- 几行就够了，不用凑长度。',
+    '',
+    '只输出这个 JSON：',
+    '```json',
+    JSON.stringify({ public: '给主人看的一段', private: '给自己看的一段' }, null, 2),
+    '```',
+  ].join('\n');
 }
 
 export function clip(text: string, max: number): string {

@@ -55,6 +55,7 @@ import { dispatchNotifications } from '../notify/index.ts';
 import { buildWhyNot } from './whynot.ts';
 import type { WhyNotOutcome } from './whynot.ts';
 import { polishResult } from './polish.ts';
+import { composeComments, composeDiary } from './compose.ts';
 import { prepareVisuals } from '../media/frames.ts';
 import type { VisualOverrides, VisualResult } from '../media/frames.ts';
 import { buildSystemMessage, buildUserPreamble, loadPromptAssets } from '../agent/prompts.ts';
@@ -581,12 +582,56 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
     data: { selected: result.selected.map((s) => s.bvid), score: result.selected.map((s) => s.score) },
   });
 
-  // ---------------------------------------------------------------- Phase 6.5 抛光（P3 口径）
-  // 「日记不许说数据话 / 评论不加句号 / 表情 ≤2」这些是可数的：先机械修，再让模型重写一次。
-  // 必须在写操作之前做——分享发出去的是抛光后的文案。
+  // ---------------------------------------------------------------- Phase 6.4 说话（P3）
+  // 评论与日记各自单开一轮：深读那一次手上全是评价，写出来的话会变成评语。
+  // 降级轮（模型已两次不可用）不再加两次调用，直接跳过。
+  if (!resultDegraded) {
+    try {
+      const assets = loadPromptAssets(deps.paths, cfg);
+      const persona = assets.persona;
+      const owner = resolveOwner(cfg, deps.secrets.selfMid());
+      const picked = result.selected[0];
+      const pickedDeep = picked ? deepReads.find((deep) => deep.bvid === picked.bvid) : undefined;
+      const wantsShare = Boolean(picked && picked.share && picked.share.channel === cfg.share.via);
+      const wantsPlain = Boolean(cfg.share.enabled && cfg.share.comment.plain && picked?.comment?.want === true);
+
+      if (picked && pickedDeep && (wantsShare || wantsPlain)) {
+        const composed = await composeComments(
+          { llm: deps.llm, logger, persona },
+          { item: picked, deep: pickedDeep, config: cfg, ownerName: owner.name },
+        );
+        llmCalls += composed.usage.calls;
+        usage.promptTokens += composed.usage.promptTokens;
+        usage.completionTokens += composed.usage.completionTokens;
+        usage.cachedTokens += composed.usage.cachedTokens;
+        for (const line of composed.notes) notes.push(line);
+        if (composed.shareText) picked.share = { ...(picked.share ?? { channel: cfg.share.via, text: '', reason: '' }), text: composed.shareText };
+        if (composed.plainText && picked.comment) picked.comment = { ...picked.comment, text: composed.plainText };
+      }
+
+      const diary = await composeDiary({ llm: deps.llm, logger, persona }, { date, result, deepReads });
+      llmCalls += diary.usage.calls;
+      usage.promptTokens += diary.usage.promptTokens;
+      usage.completionTokens += diary.usage.completionTokens;
+      usage.cachedTokens += diary.usage.cachedTokens;
+      for (const line of diary.notes) notes.push(line);
+      if (diary.diary.public.length > 0 || diary.diary.private.length > 0) {
+        result = { ...result, diary: { ...result.diary, ...diary.diary } };
+      }
+    } catch (err) {
+      notes.push(`写评论/日记出错（不影响本轮）：${humanError(err)}`);
+    }
+  }
+
+  // ---------------------------------------------------------------- Phase 6.5 抛光（机械修）
+  // 只做「位置确定」的修（去句号、去日记里的表情码）；重写功能等这两版定稿后再开。
   try {
-    const polished = await polishResult({ llm: deps.llm, logger }, result, cfg, { allowRewrite: !resultDegraded });
+    const polished = await polishResult({ llm: deps.llm, logger }, result, cfg, { allowRewrite: false });
     result = polished.result;
+    llmCalls += polished.usage.calls;
+    usage.promptTokens += polished.usage.promptTokens;
+    usage.completionTokens += polished.usage.completionTokens;
+    usage.cachedTokens += polished.usage.cachedTokens;
     for (const line of polished.notes) notes.push(line);
   } catch (err) {
     notes.push(`日记/评论抛光出错（不影响本轮）：${humanError(err)}`);
@@ -813,8 +858,15 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
   if (reportPath) logger.info('orchestrator', `报告已写入 ${reportPath}`);
 
   try {
-    writeDiary(deps.paths, { date, label: roundLabel(startedAt), kind: 'public', title: cfg.diary.publicTitle, body: result.diary.public });
-    writeDiary(deps.paths, { date, label: roundLabel(startedAt), kind: 'private', title: cfg.diary.privateTitle, body: result.diary.private });
+    // P3：日记由单独一轮生成，可能真的没写出来（模型失败/它觉得没东西可写）——那就别落空文件
+    if (result.diary.public.trim().length > 0) {
+      writeDiary(deps.paths, { date, label: roundLabel(startedAt), kind: 'public', title: cfg.diary.publicTitle, body: result.diary.public });
+    } else {
+      notes.push('公开日记这篇没写成（模型没回内容，没落空文件）');
+    }
+    if (result.diary.private.trim().length > 0) {
+      writeDiary(deps.paths, { date, label: roundLabel(startedAt), kind: 'private', title: cfg.diary.privateTitle, body: result.diary.private });
+    }
   } catch (err) {
     errors.push(`日记写入失败：${humanError(err)}`);
   }

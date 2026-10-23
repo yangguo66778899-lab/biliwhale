@@ -49,7 +49,17 @@ export function createOfflineStack(opts: OfflineOptions): OfflineStack {
   const transport = new FixtureTransport(path.join(fixturesDir, 'bili'), opts.logger);
   const api = new BiliApi(transport, opts.logger);
   const scripted = makeScriptedFetch({
-    files: opts.llmFiles ?? [path.join(fixturesDir, 'llm', 'screen.json'), path.join(fixturesDir, 'llm', 'deep.json')],
+    // 顺序必须和一轮里的调用顺序一致：初筛 → 深读
+    files:
+      opts.llmFiles ??
+      [path.join(fixturesDir, 'llm', 'screen.json'), path.join(fixturesDir, 'llm', 'deep.json')],
+    // 「写评论 / 写日记」是可选调用（可能被跳过），按 prompt 内容认，别靠队列顺序
+    routes: opts.llmFiles
+      ? undefined
+      : [
+          { match: /# 你刚看完这条/u, file: path.join(fixturesDir, 'llm', 'comment.json') },
+          { match: /今天看完的/u, file: path.join(fixturesDir, 'llm', 'diary.json') },
+        ],
     logger: opts.logger,
   });
   const llm = new LlmClient({
@@ -133,6 +143,8 @@ function notFound<T = never>(url: string): Result<T> {
 
 interface ScriptedOptions {
   files: string[];
+  /** 按 prompt 内容路由（P3 起「写评论/写日记」是可选调用，队列顺序靠不住）。 */
+  routes?: Array<{ match: RegExp; file: string }>;
   logger: Logger;
 }
 
@@ -152,8 +164,10 @@ export function makeScriptedFetch(opts: ScriptedOptions): {
     }
 
     calls += 1;
-    const file = opts.files[index];
-    index = Math.min(index + 1, opts.files.length - 1);
+    const body = typeof init?.body === 'string' ? init.body : '';
+    const routed = opts.routes?.find((route) => route.match.test(body));
+    const file = routed ? routed.file : opts.files[index];
+    if (!routed) index = Math.min(index + 1, opts.files.length - 1);
     if (!file) return new Response(JSON.stringify({ error: { message: '没有更多脚本化响应了' } }), { status: 500 });
 
     const content = fs.readFileSync(file, 'utf8');

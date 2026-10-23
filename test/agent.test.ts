@@ -104,9 +104,10 @@ test('最终结果：selected 必须来自深读，理由不能太短', () => { 
   );
   assert.equal(shortWhy.ok, false);
 
-  const noDiary = validateRoundResult({ selected: [], skipped: [], diary: { public: '', private: 'y' } }, ctx);
-  assert.equal(noDiary.ok, false);
-  if (!noDiary.ok) assert.match(noDiary.error.message, /diary.public/);
+  // P3：日记由单独一轮生成，深读结果里没有 diary 是合法的（有就当兜底）
+  const noDiary = validateRoundResult({ selected: [], skipped: [] }, ctx);
+  assert.equal(noDiary.ok, true);
+  if (noDiary.ok) assert.equal(noDiary.data.diary.public, '');
 });
 
 test('不 @ 的评论：开关开着才收；末尾句号自动去掉；关着就丢掉', () => {

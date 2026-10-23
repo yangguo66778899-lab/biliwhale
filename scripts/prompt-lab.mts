@@ -20,12 +20,13 @@ import path from 'node:path';
 import { validateConfig } from '../src/config/validate.ts';
 import { SecretsService } from '../src/config/secrets.ts';
 import { resolvePaths } from '../src/state/paths.ts';
-import { buildDeepPrompt } from '../src/orchestrator/prompts.ts';
+import { buildCommentPrompt, buildDiaryPrompt } from '../src/orchestrator/prompts.ts';
+import { composeComments, composeDiary } from '../src/orchestrator/compose.ts';
 import { LlmClient } from '../src/llm/client.ts';
 import { selfCheck } from '../src/agent/selfCheck.ts';
 import { countEmoji } from '../src/shared/biliEmoji.ts';
 import { Logger } from '../src/shared/logger.ts';
-import type { BiliVideo, CommentItem, DeepRead, RoundResult } from '../src/shared/types.ts';
+import type { BiliVideo, CommentItem, DeepRead } from '../src/shared/types.ts';
 
 interface LabFixture {
   bvid: string;
@@ -35,6 +36,9 @@ interface LabFixture {
   pubdateIso: string;
   desc?: string;
   subtitle?: string;
+  /** 夹具给的「当时为什么停下来」和一句话（真实一轮里由深读产出，这里写死以保证可比）。 */
+  why?: string;
+  oneliner?: string;
   comments?: Array<{ uname?: string; message: string; like?: number }>;
 }
 
@@ -118,54 +122,23 @@ function toDeepRead(f: LabFixture): DeepRead {
   return { bvid: f.bvid, subtitle, subtitleChars: subtitle.length, comments: toComments(f), video: toVideo(f) };
 }
 
-/** 离线假模型：返回一份形状正确的深读 JSON（只为验证工具本身，不代表任何写作质量）。 */
-function fakeFetch(): (input: string) => Promise<Response> {
-  return async () => {
-    const content = JSON.stringify({
-      selected: [
-        {
-          bvid: 'BV1lab000001',
-          score: 14,
-          why: '这段拼贴剪得紧，音效踩在点上',
-          oneliner: '四分半不拖一秒',
-          share: { channel: 'none', text: '', reason: '' },
-          comment: { want: true, text: '这刀接得真狠[doge]' },
-        },
-      ],
-      skipped: [],
-      favorite: null,
-      dynamic: null,
-      diary: {
-        public: '今天翻到一条鬼畜，四分半一点空档都没有。那个「所有人退后」接「俺是耕田」，听着就笑了。',
-        private: '偏好校准：这种拼贴我确实爱看，下次多翻一点。',
-      },
-      report_md: '这一轮翻了 1 条，挑中 1 条。',
-      notify: '挑中一条',
-      notes: '',
-    });
+/** 离线假模型：按 prompt 内容回对应形状（只为验证工具本身，不代表任何写作质量）。 */
+function fakeFetch(): (input: string, init?: RequestInit) => Promise<Response> {
+  return async (_input: string, init?: RequestInit) => {
+    const body = typeof init?.body === 'string' ? init.body : '';
+    const content = body.includes('你刚看完这条')
+      ? JSON.stringify({ comment: '这刀接得真狠[doge]', share: '这个剪得紧，音效踩在点上' })
+      : body.includes('今天看完的')
+        ? JSON.stringify({
+            public: '今天翻到一条鬼畜，四分半一点空档都没有。那个「所有人退后」接「俺是耕田」，听着就笑了。',
+            private: '这种拼贴我确实爱看，下次多翻一点。',
+          })
+        : JSON.stringify({ selected: [], skipped: [], notify: '', notes: '', report_md: '' });
     return new Response(JSON.stringify({ choices: [{ message: { content }, finish_reason: 'stop' }] }), {
       status: 200,
       headers: { 'content-type': 'application/json' },
     }) as unknown as Response;
   };
-}
-
-function systemText(): string {
-  const read = (name: string): string => fs.readFileSync(path.join('src', 'prompts', name), 'utf8');
-  return `${read('system.md').trim()}\n\n---\n\n${read('charter.md').trim()}\n`;
-}
-
-function extractJson(raw: string): Record<string, unknown> | null {
-  const fenced = /```(?:json)?\s*([\s\S]*?)```/u.exec(raw);
-  const text = (fenced?.[1] ?? raw).trim();
-  const start = text.indexOf('{');
-  const end = text.lastIndexOf('}');
-  if (start < 0 || end <= start) return null;
-  try {
-    return JSON.parse(text.slice(start, end + 1)) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
 }
 
 function labLogger(): Logger {
@@ -226,64 +199,77 @@ async function main(): Promise<void> {
     ...(args.fixtures ? { fetchImpl: fakeFetch() as never } : {}),
   });
 
-  const system = systemText();
-  const index: string[] = [`# prompt lab · ${stamp}`, '', `材料 ${fixtures.length} 条 × 每轮 ${args.times} 轮`, ''];
+  const index: string[] = [`# prompt lab · ${stamp}`, '', `材料 ${fixtures.length} 条 × 每轮 ${args.times} 轮`, '', '（P3 起只跑「写评论」和「写日记」两段；打分/挑中由固定夹具给，不在这里重跑）', ''];
 
   for (const fixture of fixtures) {
     const deepReads = [toDeepRead(fixture)];
-    const prompt = buildDeepPrompt({ deepReads, screen: [], lightReads: [], config, dryRun: false });
-    fs.mkdirSync(path.join(outDir, fixture.bvid), { recursive: true });
-    fs.writeFileSync(path.join(outDir, fixture.bvid, 'prompt.md'), prompt, 'utf8');
+    const item = {
+      bvid: fixture.bvid,
+      score: 14,
+      why: fixture.why ?? '这条里有几句让人停一下的东西',
+      oneliner: fixture.oneliner ?? '一句话',
+      comment: { want: true, text: '' },
+      share: { channel: 'comment' as const, text: '', reason: '夹具给的分' },
+    };
+    const dirV = path.join(outDir, fixture.bvid);
+    fs.mkdirSync(dirV, { recursive: true });
+    fs.writeFileSync(
+      path.join(dirV, 'prompt-comment.md'),
+      buildCommentPrompt({
+        deep: deepReads[0] as never,
+        why: item.why,
+        oneliner: item.oneliner,
+        ownerName: '你',
+        persona: '',
+        maxChars: config.share.comment.maxChars,
+        wantPlain: true,
+        wantShare: true,
+      }),
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(dirV, 'prompt-diary.md'),
+      buildDiaryPrompt({
+        date: '2026-10-23',
+        watched: [{ title: fixture.title, up: fixture.up, oneLine: item.oneliner, why: item.why }],
+        material: { title: fixture.title, subtitle: fixture.subtitle ?? '', comments: deepReads[0]?.comments ?? [] },
+        persona: '',
+      }),
+      'utf8',
+    );
 
     for (let run = 1; run <= args.times; run += 1) {
-      const completion = await llm.chat({
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: prompt },
-        ],
-        jsonMode: true,
-        maxTokens: 3000,
-      });
-      const dir = path.join(outDir, fixture.bvid, `run-${run}`);
+      const dir = path.join(dirV, `run-${run}`);
       fs.mkdirSync(dir, { recursive: true });
-      if (!completion.ok) {
-        fs.writeFileSync(path.join(dir, 'error.txt'), completion.error.message, 'utf8');
-        index.push(`- ${fixture.bvid} run-${run}：失败（${completion.error.message}）`);
-        continue;
-      }
-      fs.writeFileSync(path.join(dir, 'raw.txt'), completion.data.content, 'utf8');
-      const json = extractJson(completion.data.content);
-      if (!json) {
-        index.push(`- ${fixture.bvid} run-${run}：模型没回 JSON`);
-        continue;
-      }
-      const parsed = json as unknown as RoundResult;
-      const diary = parsed.diary ?? { public: '', private: '' };
-      fs.writeFileSync(path.join(dir, 'diary-public.md'), diary.public ?? '', 'utf8');
-      fs.writeFileSync(path.join(dir, 'diary-private.md'), diary.private ?? '', 'utf8');
-      const comment = parsed.selected?.[0]?.comment;
-      const share = parsed.selected?.[0]?.share;
-      fs.writeFileSync(path.join(dir, 'comment.md'), comment?.text ?? '（这轮没写评论）', 'utf8');
-      fs.writeFileSync(path.join(dir, 'share.md'), share?.text ?? '（这轮没写 @ 文案）', 'utf8');
+      const comment = await composeComments(
+        { llm, logger, persona: '' },
+        { item, deep: deepReads[0] as never, config, ownerName: '你' },
+      );
+      const diary = await composeDiary({ llm, logger, persona: '' }, { date: '2026-10-23', result: { selected: [item], skipped: [] } as never, deepReads });
+      fs.writeFileSync(path.join(dir, 'comment.md'), comment.plainText || '（这轮没写评论）', 'utf8');
+      fs.writeFileSync(path.join(dir, 'share.md'), comment.shareText || '（这轮没写 @ 文案）', 'utf8');
+      fs.writeFileSync(path.join(dir, 'diary-public.md'), diary.diary.public, 'utf8');
+      fs.writeFileSync(path.join(dir, 'diary-private.md'), diary.diary.private, 'utf8');
 
       const issues = selfCheck({
-        diary: { public: diary.public ?? '', private: diary.private ?? '' },
+        diary: diary.diary,
         comments: [
-          ...(comment?.text ? [{ bvid: fixture.bvid, kind: 'plain' as const, text: comment.text }] : []),
-          ...(share?.text ? [{ bvid: fixture.bvid, kind: 'share' as const, text: share.text }] : []),
+          ...(comment.plainText ? [{ bvid: fixture.bvid, kind: 'plain' as const, text: comment.plainText }] : []),
+          ...(comment.shareText ? [{ bvid: fixture.bvid, kind: 'share' as const, text: comment.shareText }] : []),
         ],
         maxCommentChars: config.share.comment.maxChars,
         maxShareChars: config.share.comment.maxChars,
       });
-      const text = comment?.text ?? '';
+      const text = comment.plainText;
+      const notes = [...comment.notes, ...diary.notes];
       index.push(
-        `- ${fixture.bvid} run-${run}：评论 ${Array.from(text).length} 字 · 句号 ${/[。．]\s*$/u.test(text) ? '有' : '无'} · 表情 ${countEmoji(text)} 个 · 自检 ${issues.length === 0 ? '通过' : `${issues.length} 处（${issues.map((i) => i.key).join('、')}）`}`,
+        `- ${fixture.bvid} run-${run}：评论 ${Array.from(text).length} 字 · 句号 ${/[。．]\s*$/u.test(text) ? '有' : '无'} · 表情 ${countEmoji(text)} 个 · 日记 ${Array.from(diary.diary.public).length} 字 · 自检 ${issues.length === 0 ? '通过' : `${issues.length} 处（${issues.map((i) => i.key).join('、')}）`}${notes.length > 0 ? ` · ${notes.join('；')}` : ''}`,
       );
     }
     index.push('');
   }
 
-  index.push('## 怎么看', '', '- 每个 `run-*/comment.md` 是她打算发的评论；`diary-public.md` / `diary-private.md` 是两本日记。', '- `prompt.md` 是这一条材料的完整输入（改提示词后可以 diff 它）。', '');
+  index.push('## 怎么看', '', '- 每个 `run-*/comment.md` 是她打算发的评论；`diary-public.md` / `diary-private.md` 是两本日记。', '- `prompt-comment.md` / `prompt-diary.md` 是喂进去的完整输入（改提示词后可以 diff 它）。', '');
   fs.writeFileSync(path.join(outDir, 'index.md'), index.join('\n'), 'utf8');
   console.log(`跑完了：${outDir}`);
   console.log(`先看 ${path.join(outDir, 'index.md')}`);

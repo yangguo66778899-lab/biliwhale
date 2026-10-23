@@ -61,8 +61,9 @@ test('golden：离线夹具跑完整一轮（取候选 → 初筛 → 深读 →
     assert.equal(record.counts.deepRead, 3, '深读按分数取前 3 条');
     assert.equal(record.counts.selected, 2);
     assert.equal(record.counts.shared, 0, 'M0 不发任何东西');
-    assert.equal(offline.llmCalls(), 2, '初筛 + 深读各一次模型调用');
-    assert.equal(record.model.calls, 2, 'run 记录里的模型调用次数要准确（初筛 + 深读）');
+    // P3：日记单开一轮（评论那一轮因为分享关着被跳过），所以是初筛 + 深读 + 写日记
+    assert.equal(offline.llmCalls(), 3, '初筛 + 深读 + 写日记各一次模型调用');
+    assert.equal(record.model.calls, 3, 'run 记录里的模型调用次数要准确（含单开的日记那一轮）');
     assert.ok(record.model.promptTokens > 0);
     assert.ok(record.phases.some((p) => p.name === 'persist' && p.status === 'ok'));
 
@@ -86,7 +87,9 @@ test('golden：离线夹具跑完整一轮（取候选 → 初筛 → 深读 →
     const privateDiary = diaryFile(paths, 'private', today);
     assert.ok(fs.existsSync(publicDiary) && fs.existsSync(privateDiary));
     assert.match(fs.readFileSync(publicDiary, 'utf8'), /周报|猫/);
-    assert.match(fs.readFileSync(privateDiary, 'utf8'), /偏好校准/, '私人日记必须有偏好校准');
+    // P3：日记单开一轮、不再要求「偏好校准」这种总结段；这里钉的是「不许出现账话」
+    const privateText = fs.readFileSync(privateDiary, 'utf8');
+    assert.equal(/评分|\/20|候选|阈值/.test(privateText), false, '私人日记不该出现账话');
 
     // 判重账本记下了 5 条
     const seenFile = JSON.parse(fs.readFileSync(paths.seen, 'utf8')) as { videos: Record<string, unknown> };

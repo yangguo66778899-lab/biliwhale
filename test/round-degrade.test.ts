@@ -112,14 +112,14 @@ test('深读第一次缺字段 → 修一次就成功（只多花一次调用，
       }),
       'utf8',
     );
-    // 第一次深读：缺 diary.private（会被校验拦下）
+    // 第一次深读：缺 selected[0].why（会被校验拦下）。
+    // 注意：P3 起 diary 不再由深读这一轮产出，所以「缺 diary」不再算错——要用仍然必填的字段。
     const badDeep = path.join(root, 'llm', 'deep-bad.json');
     fs.writeFileSync(
       badDeep,
       JSON.stringify({
-        selected: [{ bvid: 'BV1a0000001', score: 16, why: '理由足够长，能通过校验。', oneliner: '一句话', share: { channel: 'none', text: '' } }],
+        selected: [{ bvid: 'BV1a0000001', score: 16, oneliner: '一句话', share: { channel: 'none', text: '' } }],
         skipped: [],
-        diary: { public: '今天看了一条。' },
         notify: '挑中一条',
       }),
       'utf8',
@@ -150,7 +150,8 @@ test('深读第一次缺字段 → 修一次就成功（只多花一次调用，
     const record = await runRound(deps, { trigger: 'manual', dryRun: true });
 
     assert.equal(record.status, 'ok', `修一次之后应成功：${record.errors.join('；')}`);
-    assert.equal(offline.llmCalls(), 3, '初筛一次 + 深读一次 + 修复一次');
+    // 初筛 + 深读 + 修复 + 单开的日记一轮（分享是 none，评论那轮跳过）
+    assert.equal(offline.llmCalls(), 4, '初筛一次 + 深读一次 + 修复一次 + 写日记一次');
     assert.equal(record.counts.selected, 2);
     assert.deepEqual(record.errors, [], '修好了就不该留错误');
   } finally {

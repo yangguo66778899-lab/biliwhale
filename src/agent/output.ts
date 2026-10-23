@@ -99,14 +99,17 @@ export interface RoundContext {
   commentMaxChars?: number;
 }
 
-/** 「不 @ 的评论」：模型可能写字符串、也可能写 `{want,text}`；都容错。 */
+/**
+ * 「不 @ 的评论」：模型可能写字符串、也可能写 `{want,text}`；都容错。
+ * P3 起评论单开一轮，所以深读这里只会给 `want`（text 留空，由说话那一轮填）。
+ */
 function normalizePlainComment(raw: unknown, ctx: RoundContext): { want: boolean; text: string } | null {
   if (!ctx.commentPlain) return null;
   const text = isObj(raw) ? str(raw.text).trim() : str(raw).trim();
   const want = isObj(raw) && typeof raw.want === 'boolean' ? raw.want : text.length > 0;
-  if (!want || text.length < 2) return null;
+  if (!want) return null;
   const max = Math.max(20, ctx.commentMaxChars ?? 150);
-  return { want: true, text: clip(stripTrailingPeriod(text), max) };
+  return { want: true, text: text.length > 0 ? clip(stripTrailingPeriod(text), max) : '' };
 }
 
 /** 评论/聊天默认不加句号（真人很少打）——这里是机械兜底，prompt 里也说了。 */
@@ -117,12 +120,10 @@ export function stripTrailingPeriod(text: string): string {
 export function validateRoundResult(raw: unknown, ctx: RoundContext): Result<RoundResult> {
   if (!isObj(raw)) return invalid('最终结果不是 JSON 对象');
 
-  const diary = isObj(raw.diary) ? raw.diary : null;
-  if (!diary) return invalid('缺少 diary 对象');
-  const diaryPublic = str(diary.public).trim();
-  const diaryPrivate = str(diary.private).trim();
-  if (!diaryPublic) return invalid('diary.public 是空的：公开日记必须写');
-  if (!diaryPrivate) return invalid('diary.private 是空的：私人日记必须写');
+  // P3 起日记单开一轮；深读结果里没有 diary 是正常的（有就用，当兜底）
+  const diaryRaw = isObj(raw.diary) ? raw.diary : null;
+  const diaryPublic = diaryRaw ? str(diaryRaw.public).trim() : '';
+  const diaryPrivate = diaryRaw ? str(diaryRaw.private).trim() : '';
 
   const selectedRaw = Array.isArray(raw.selected) ? raw.selected : [];
   const selected: SelectedItem[] = [];

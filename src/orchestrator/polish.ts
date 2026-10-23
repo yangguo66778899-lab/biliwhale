@@ -20,6 +20,20 @@ export interface PolishDeps {
   logger: Logger;
 }
 
+export interface ComposeUsage {
+  calls: number;
+  promptTokens: number;
+  completionTokens: number;
+  cachedTokens: number;
+}
+
+const ZERO_USAGE: ComposeUsage = { calls: 0, promptTokens: 0, completionTokens: 0, cachedTokens: 0 };
+
+/** 统一出口：机械修也可能没花模型调用，usage 就是 0。 */
+function done(result: RoundResult, notes: string[], usage: ComposeUsage = ZERO_USAGE) {
+  return { result, notes, usage };
+}
+
 function collect(result: RoundResult, cfg: Config): SelfCheckText[] {
   const out: SelfCheckText[] = [];
   for (const item of result.selected) {
@@ -49,13 +63,13 @@ export async function polishResult(
   result: RoundResult,
   cfg: Config,
   options: { allowRewrite?: boolean } = {},
-): Promise<{ result: RoundResult; notes: string[] }> {
+): Promise<{ result: RoundResult; notes: string[]; usage: ComposeUsage }> {
   const notes: string[] = [];
   const original = collect(result, cfg);
-  if (original.length === 0 && result.diary.public.trim().length === 0) return { result, notes };
+  if (original.length === 0 && result.diary.public.trim().length === 0) return done(result, notes);
 
   const firstPass = selfCheck(toInput(result, cfg, original));
-  if (firstPass.length === 0) return { result, notes };
+  if (firstPass.length === 0) return done(result, notes);
 
   // 1) 机械修
   const fixed = applyMechanicalFixes(toInput(result, cfg, original));
@@ -77,13 +91,13 @@ export async function polishResult(
 
   if (rewriteNeeded.length === 0) {
     deps.logger.info('polish', `机械修掉 ${firstPass.length} 处（句号/表情）`);
-    return { result: next, notes };
+    return done(next, notes);
   }
 
   // 降级路径（模型已经两次不可用）不再花钱调第三次：只做机械修，问题留给下次
   if (options.allowRewrite === false) {
-    notes.push(`日记/评论还有 ${rewriteNeeded.length} 处不合口径（模型已降级，这次不再重写）`);
-    return { result: next, notes };
+    notes.push(`日记/评论还有 ${rewriteNeeded.length} 处不合口径（这次不再重写）`);
+    return done(next, notes);
   }
 
   // 2) 只重写不合格的那几处（一次调用；失败就保持现状并说明）
@@ -100,17 +114,26 @@ export async function polishResult(
     temperature: 0.3,
   });
 
+  const usage: ComposeUsage = completion.ok
+    ? {
+        calls: 1,
+        promptTokens: completion.data.usage.promptTokens,
+        completionTokens: completion.data.usage.completionTokens,
+        cachedTokens: completion.data.usage.cachedTokens,
+      }
+    : { ...ZERO_USAGE, calls: 1 };
+
   if (!completion.ok) {
     notes.push(`日记/评论没修成（模型没响应：${completion.error.message}）`);
     deps.logger.warn('polish', `抛光失败：${completion.error.message}`);
-    return { result: next, notes };
+    return done(next, notes, usage);
   }
 
   const merged = mergeRewrite(next, completion.data.content, fixed.comments.length);
   if (!merged) {
     notes.push('日记/评论没修成（模型没按要求回 JSON）');
     deps.logger.warn('polish', '抛光结果解析失败');
-    return { result: next, notes };
+    return done(next, notes, usage);
   }
 
   const second = selfCheck(toInput(merged, cfg, collect(merged, cfg)));
@@ -119,7 +142,7 @@ export async function polishResult(
   } else {
     notes.push(`日记/评论按口径修过一次（${rewriteNeeded.length} 处）`);
   }
-  return { result: merged, notes };
+  return done(merged, notes, usage);
 }
 
 /** 把模型重写回来的 JSON 合并进结果；形状不对就返回 null（保持原文）。 */
