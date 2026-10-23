@@ -18,6 +18,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { validateConfig } from '../src/config/validate.ts';
+import { SecretsService } from '../src/config/secrets.ts';
+import { resolvePaths } from '../src/state/paths.ts';
 import { buildDeepPrompt } from '../src/orchestrator/prompts.ts';
 import { LlmClient } from '../src/llm/client.ts';
 import { selfCheck } from '../src/agent/selfCheck.ts';
@@ -172,6 +174,33 @@ function labLogger(): Logger {
   return new Logger({ logDir: dir, eventsFile: path.join(dir, 'events.jsonl'), level: 'warn' });
 }
 
+/**
+ * 取 key：和内核一模一样的顺序——环境变量优先，其次数据目录里的 secrets.json。
+ * 这样在面板里填过 key 的人直接就能跑，不必再贴一遍（也免得 key 出现在命令行历史里）。
+ * 只读，绝不打日志/回显。
+ */
+function resolveApiKey(logger: Logger, allowFixtures: boolean): string {
+  if (allowFixtures) return process.env.BILIWHALE_API_KEY?.trim() || 'fixtures';
+  const paths = resolvePaths(process.env.BILIWHALE_DATA_DIR ? { dataDir: process.env.BILIWHALE_DATA_DIR } : {});
+  const fromStore = new SecretsService(paths.dataDir, logger).apiKey();
+  if (fromStore) {
+    console.log(`用面板里存的 key（${paths.dataDir}）`);
+    return fromStore;
+  }
+  const fromEnv = process.env.BILIWHALE_API_KEY?.trim();
+  if (fromEnv) return fromEnv;
+  throw new Error(
+    [
+      '找不到 DeepSeek key。三种给法（任选一种）：',
+      '  1) 面板「设置 → 模型与花费 → API key」填一次，然后直接跑这个命令（会读你机器上已存的）；',
+      `  2) 临时环境变量：$env:BILIWHALE_API_KEY = "sk-…"（只对当前窗口有效）`,
+      '  3) 永久：setx BILIWHALE_API_KEY "sk-…"（新开窗口才生效）',
+      `  查过的地方：${paths.dataDir}\\secrets.json 与环境变量 BILIWHALE_API_KEY`,
+      '  不想用 key：加 --fixtures（假模型，只验证工具本身）',
+    ].join('\n'),
+  );
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const fixtures = loadFixtures(path.join('fixtures', 'prompt-lab')).slice(0, args.videos);
@@ -183,8 +212,8 @@ async function main(): Promise<void> {
   const outDir = path.join(args.out, stamp);
   fs.mkdirSync(outDir, { recursive: true });
 
-  const apiKey = process.env.BILIWHALE_API_KEY ?? (args.fixtures ? 'fixtures' : '');
-  if (!apiKey) throw new Error('没有 BILIWHALE_API_KEY：先设环境变量，或者加 --fixtures 离线跑');
+  const logger = labLogger();
+  const apiKey = resolveApiKey(logger, args.fixtures);
   const llm = new LlmClient({
     apiKey,
     baseUrl: process.env.BILIWHALE_BASE_URL ?? 'https://api.deepseek.com',
@@ -193,7 +222,7 @@ async function main(): Promise<void> {
     maxTokens: 3000,
     timeoutMs: 120_000,
     maxRetries: 1,
-    logger: labLogger(),
+    logger,
     ...(args.fixtures ? { fetchImpl: fakeFetch() as never } : {}),
   });
 
