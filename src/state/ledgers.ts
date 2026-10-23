@@ -148,6 +148,23 @@ export class QuotaLedger {
     return this.store.get().log.filter((e) => e.at.slice(0, 10) === dateLocal && e.type === type && e.status !== 'failed').length;
   }
 
+  /**
+   * 只数「不 @ 的评论」（target === 'plain'）：它和 @ 分享共用 type=comment，
+   * 但额度分开算（share.comment.plainDailyCap），所以必须能按 target 过滤。
+   * 只算真的发出去的（预演不占额度，和 sharesOn 同一口径）。
+   */
+  countPlainCommentsOn(dateLocal: string): number {
+    return this.store
+      .get()
+      .log.filter(
+        (e) =>
+          e.at.slice(0, 10) === dateLocal &&
+          e.type === 'comment' &&
+          e.target === 'plain' &&
+          (e.status === 'sent' || e.status === 'held'),
+      ).length;
+  }
+
   lastSentAt(bvid: string, type: 'all' | 'share' = 'share'): string | null {
     const matched = this.store
       .get()

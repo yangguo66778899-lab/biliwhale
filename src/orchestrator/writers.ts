@@ -44,6 +44,8 @@ export interface ReportInput {
   shareDecisions: Map<string, GateDecision>;
   /** 真正执行后的结果（有就按它渲染，比闸门结论更准）。 */
   shareAttempts?: Map<string, ShareAttemptView>;
+  /** 「不 @ 的评论」的执行结果（P3；有就单独写一行）。 */
+  plainComments?: Map<string, ShareAttemptView>;
   usage: { promptTokens: number; completionTokens: number; costCny: number };
   dryRun: boolean;
   notes: string[];
@@ -78,7 +80,7 @@ function ensureHeader(file: string, header: string, intro?: string): void {
 }
 
 export function buildReportSection(input: ReportInput): string {
-  const { result, counts, videos, shareDecisions, shareAttempts } = input;
+  const { result, counts, videos, shareDecisions, shareAttempts, plainComments } = input;
   if (input.level === 'off') return '';
 
   const lines: string[] = [];
@@ -154,6 +156,9 @@ export function buildReportSection(input: ReportInput): string {
           lines.push(`- 没发：${decision.deny.join('；')}`);
         }
       }
+      // 「不 @ 的评论」：和分享分开写，否则用户看不出这条是给评论区看的
+      const plain = plainComments?.get(item.bvid);
+      if (plain) renderPlainComment(lines, plain);
       lines.push('');
     }
   }
@@ -201,6 +206,28 @@ function cleanProse(text: string, max: number): string {
   const trimmed = text.trim();
   if (!trimmed) return '';
   return trimmed.length <= max ? trimmed : `${trimmed.slice(0, max - 1)}…`;
+}
+
+/**
+ * 「不 @ 的评论」：发了/没发各写一行，被拒也把文案写出来（和分享同一套规矩）。
+ */
+function renderPlainComment(lines: string[], attempt: ShareAttemptView): void {
+  if (attempt.status === 'sent' || attempt.status === 'held' || attempt.status === 'unverified') {
+    lines.push(`- 评论（不 @）：发了${attempt.rpid ? `（rpid ${attempt.rpid}）` : ''}`);
+    if (attempt.content.trim().length > 0) lines.push(`- 评论内容：${attempt.content}`);
+    return;
+  }
+  if (attempt.status === 'dry_run') {
+    lines.push('- 评论（不 @）：预演（没真的发）');
+    if (attempt.content.trim().length > 0) lines.push(`- 本来会发：${attempt.content}`);
+    return;
+  }
+  if (attempt.status === 'failed') {
+    lines.push(`- 评论（不 @）失败：${attempt.error ?? '发送失败'}（不自动重发）`);
+    return;
+  }
+  lines.push(`- 评论（不 @）没发：${attempt.deny.join('；') || '闸门没过'}`);
+  if (attempt.content.trim().length > 0) lines.push(`- 本来会发：${attempt.content}`);
 }
 
 /** 把一次分享尝试写成两三行（人话，不掺内部术语）。 */

@@ -14,6 +14,7 @@
     "run": "node src/cli.ts",
     "serve": "node src/cli.ts serve",
     "offline": "node src/cli.ts run --now --dry --fixtures --data-dir .run/offline",
+    "prompt:lab": "node scripts/prompt-lab.mts",
     "live-read": "node src/cli.ts run --now --dry --mock-model --data-dir .run/live-read",
     "smoke:bili": "node scripts/smoke-bili.ts",
     "tray:build": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-tray.ps1",

@@ -7,6 +7,7 @@
 
 import type { Config } from '../config/spec.ts';
 import type { Candidate, DeepRead, LightRead, ScreenItem } from '../shared/types.ts';
+import { BILI_EMOJI } from '../shared/biliEmoji.ts';
 
 /** 深读阶段塞进 prompt 的字幕上限（工具里还能要更长的）。 */
 const DEEP_SUBTITLE_PROMPT_CHARS = 6000;
@@ -133,6 +134,12 @@ export function buildDeepPrompt(input: {
     ? '动态**不在这一轮里发**（它只能从面板手动发、且要二次确认）：`dynamic` 一律写 `null`。'
     : '动态开关是**关着**的：`dynamic` 写 `null`。';
 
+  // 「不 @ 的评论」：和分享（@ 主人）是两件事——一个给评论区看，一个通知主人
+  const plainOn = input.config.share.enabled && input.config.share.comment.plain;
+  const plainNote = plainOn
+    ? `想不想让评论区其他人也看到这句话？想就写 \`"comment": {"want": true, "text": "…"}\`（不 @ 任何人，≤${input.config.share.comment.maxChars} 字，**可以很短**，一句也行；一天最多 ${input.config.share.comment.plainDailyCap} 条）。不想就写 \`"comment": null\`。`
+    : '`comment` 一律写 `null`（这个开关关着）。';
+
   return [
     ...(input.visual
       ? [
@@ -155,20 +162,29 @@ export function buildDeepPrompt(input: {
     '- 分数、额度、发不发、复核结果都由代码另外写，这里不用替它解释。',
     '',
     ...blocks,
+    '# 写东西的口径',
+    '',
+    '- **场景**：你是一个刚看完视频的观众，不是来汇报的。评论是「我想说一句」，日记是「我记一下」，都不是交付物。',
+    '- **字数**：下面的上限**不是目标**。一句话、十几个字，只要话说完了就合格；想写长，得有值得写长的细节。',
+    '- **标点**：评论和聊天**末尾不加句号**（问号、省略号、感叹号可以有）；日记正常标点。',
+    `- **表情**：评论可以用 B 站表情码，一条最多 1–2 个，情绪对不上就别用。只能用这些：${BILI_EMOJI.join(' ')}；日记里不用。`,
+    '- **日记不说数据话**：不写「我选了 N 条」「评分 X/20」「阈值」「候选」「token」「分享了几条」——那是账，不是感受。',
+    '',
     '# 本轮任务',
     '',
     '1. 对上面每条写 `why`（两三句，具体：哪句话/哪个点让你觉得值得）和 `oneliner`（一句话，给分享用）。',
     `2. 决定分享哪一条：最多一条，只从上面这些里挑，分数要 ≥ ${input.config.share.minScore}/20；决定发就写 \`"channel":"${input.config.share.via}"\`，不发就写 \`"channel":"none"\`。`,
     `   ${shareNote}`,
-    `3. 收藏：${favNote}`,
-    `4. ${dynamicNote}`,
-    '5. 写两本日记：',
+    `3. 不 @ 的评论：${plainNote}`,
+    `4. 收藏：${favNote}`,
+    `5. ${dynamicNote}`,
+    '6. 写两本日记：',
     `   - \`diary.public\`（给用户看的）：散文体，可以对「你」说话，必须有具体细节（哪句话、第几分钟、评论区谁说了什么）。**不要写成汇报**。`,
     '   - `diary.private`（给自己看的）：不加滤镜，必须含「偏好校准」：哪条视频、用户什么反应、下次往哪偏。',
-    '6. `notify` 写一句给用户的通知（一句人话，不是摘要列表）。',
-    '7. `report_md`：这一轮的日报正文（**2–4 段 Markdown**，写给用户看）。讲清「翻了几条、为什么只挑这条 / 为什么一条都没挑」，可以有具体细节；不要写成日记那种第一人称抒情，也不要照抄 `why` 的原句。**不要写发没发、额度、冷却**——那些代码会写。',
-    '8. `notes` 写本轮的异常/降级（没有就写空字符串）。',
-    '9. **不要写「发没发」「为什么没发」「收藏/点赞成没成」**：这些由代码判定、报告里会另外写；你只负责写文案。',
+    '7. `notify` 写一句给用户的通知（一句人话，不是摘要列表）。',
+    '8. `report_md`：这一轮的日报正文（**2–4 段 Markdown**，写给用户看）。讲清「翻了几条、为什么只挑这条 / 为什么一条都没挑」，可以有具体细节；不要写成日记那种第一人称抒情，也不要照抄 `why` 的原句。**不要写发没发、额度、冷却**——那些代码会写。',
+    '9. `notes` 写本轮的异常/降级（没有就写空字符串）。',
+    '10. **不要写「发没发」「为什么没发」「收藏/点赞成没成」**：这些由代码判定、报告里会另外写；你只负责写文案。',
     '',
     input.dryRun ? '本轮是**只读预演**：即使决定了分享也不会真的发出去，你照常写文案就行（用户要看「本来会发什么」）。' : '',
     '',
@@ -176,7 +192,16 @@ export function buildDeepPrompt(input: {
     '```json',
     JSON.stringify(
       {
-        selected: [{ bvid: 'BV...', score: 15, why: '两三句', oneliner: '一句话', share: { channel: 'none', text: '', reason: '' } }],
+        selected: [
+          {
+            bvid: 'BV...',
+            score: 15,
+            why: '两三句',
+            oneliner: '一句话',
+            share: { channel: 'none', text: '', reason: '' },
+            comment: plainOn ? { want: true, text: '一句不 @ 任何人的评论（可以很短、末尾不加句号）' } : null,
+          },
+        ],
         skipped: [{ bvid: 'BV...', reason: 'low_score', note: '' }],
         favorite: input.config.fav.enabled ? { bvid: 'BV...', reason: '为什么留（至少 6 个字）' } : null,
         dynamic: null,

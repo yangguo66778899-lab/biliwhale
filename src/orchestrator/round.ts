@@ -42,7 +42,7 @@ import { humanError } from '../shared/errors.ts';
 import { collectCandidates } from './candidates.ts';
 import { gateShare } from './gate.ts';
 import type { GateDecision } from './gate.ts';
-import { executeShares, summarizeShares } from './share.ts';
+import { executePlainComments, executeShares, summarizeShares } from './share.ts';
 import { resolveOwner } from '../account/owner.ts';
 import type { ShareAttempt } from './share.ts';
 import { autoApproveOwnerDrafts, scanStrangerReplies } from './pending.ts';
@@ -54,6 +54,7 @@ import { appendNotifyLog, writeArchive, writeDiary, writeReport, videoUrl, skipR
 import { dispatchNotifications } from '../notify/index.ts';
 import { buildWhyNot } from './whynot.ts';
 import type { WhyNotOutcome } from './whynot.ts';
+import { polishResult } from './polish.ts';
 import { prepareVisuals } from '../media/frames.ts';
 import type { VisualOverrides, VisualResult } from '../media/frames.ts';
 import { buildSystemMessage, buildUserPreamble, loadPromptAssets } from '../agent/prompts.ts';
@@ -516,6 +517,8 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
     shareChannels: cfg.share.enabled ? [cfg.share.via] : [],
     shareMaxChars: cfg.share.via === 'dm' ? cfg.share.dm.maxChars : cfg.share.comment.maxChars,
     scoreMin: cfg.share.minScore,
+    commentPlain: cfg.share.enabled && cfg.share.comment.plain,
+    commentMaxChars: cfg.share.comment.maxChars,
   };
 
   let result: RoundResult;
@@ -577,6 +580,17 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
     level: resultDegraded ? 'warn' : 'info',
     data: { selected: result.selected.map((s) => s.bvid), score: result.selected.map((s) => s.score) },
   });
+
+  // ---------------------------------------------------------------- Phase 6.5 抛光（P3 口径）
+  // 「日记不许说数据话 / 评论不加句号 / 表情 ≤2」这些是可数的：先机械修，再让模型重写一次。
+  // 必须在写操作之前做——分享发出去的是抛光后的文案。
+  try {
+    const polished = await polishResult({ llm: deps.llm, logger }, result, cfg, { allowRewrite: !resultDegraded });
+    result = polished.result;
+    for (const line of polished.notes) notes.push(line);
+  } catch (err) {
+    notes.push(`日记/评论抛光出错（不影响本轮）：${humanError(err)}`);
+  }
 
   // ---------------------------------------------------------------- 判重账本（写操作之前！）
   // 只记「真的送进初筛」的（含挑中的）：候选里排在 screenLimit 之后、从没给模型看过的那些不记，
@@ -662,6 +676,27 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
     }
   }
   if (shareReport.stopped === 'risk') errors.push('撞风控：本轮已停写，冷却期内不再发');
+
+  // ---------------------------------------------------------------- 不 @ 的评论（P3，默认关）
+  // 与分享是两件事：分享 @ 主人；这条是给评论区所有人看的。独立额度、一轮最多一条。
+  const plainComments = new Map<string, ShareAttempt>();
+  if (cfg.share.enabled && cfg.share.comment.plain && !shareReport.stopped) {
+    const plainItems = result.selected
+      .filter((item) => item.comment?.want === true && (item.comment?.text ?? '').trim().length > 0)
+      .map((item) => ({ bvid: item.bvid, aid: videosAid(deepReads, item.bvid), text: String(item.comment?.text ?? '') }));
+    if (plainItems.length > 0) {
+      try {
+        const plain = await executePlainComments(
+          { logger, config: cfg, quota: deps.quota, state: deps.state, writer: deps.writer, api: deps.api, now },
+          { items: plainItems, dryRun: effectiveDryRun, todayPlain: deps.quota.countPlainCommentsOn(date) },
+        );
+        for (const note of plain.notes) notes.push(note);
+        for (const attempt of plain.attempts) plainComments.set(attempt.bvid, attempt);
+      } catch (err) {
+        notes.push(`不@评论出错（不影响本轮）：${humanError(err)}`);
+      }
+    }
+  }
 
   // ---------------------------------------------------------------- 收藏（M4，默认开）
   if (cfg.fav.enabled && result.favorite) {
@@ -769,6 +804,7 @@ export async function runRound(deps: RoundDeps, options: RoundOptions): Promise<
     videos,
     shareDecisions,
     shareAttempts: new Map(shareReport.attempts.map((attempt) => [attempt.bvid, attempt])),
+    ...(plainComments.size > 0 ? { plainComments } : {}),
     usage: { promptTokens: usage.promptTokens, completionTokens: usage.completionTokens, costCny: 0 },
     dryRun: effectiveDryRun,
     notes,

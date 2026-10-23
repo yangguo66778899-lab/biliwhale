@@ -56,8 +56,7 @@ test('初筛结果：只认本轮候选，分数夹到 0–20，重复条目去�
   assert.equal(empty.ok, false);
 });
 
-test('最终结果：selected 必须来自深读，理由不能太短', () => {
-  const good = validateRoundResult(
+test('最终结果：selected 必须来自深读，理由不能太短', () => {  const good = validateRoundResult(
     {
       selected: [
         {
@@ -108,6 +107,39 @@ test('最终结果：selected 必须来自深读，理由不能太短', () => {
   const noDiary = validateRoundResult({ selected: [], skipped: [], diary: { public: '', private: 'y' } }, ctx);
   assert.equal(noDiary.ok, false);
   if (!noDiary.ok) assert.match(noDiary.error.message, /diary.public/);
+});
+
+test('不 @ 的评论：开关开着才收；末尾句号自动去掉；关着就丢掉', () => {
+  const base = {
+    selected: [
+      {
+        bvid: 'BV1a0000001',
+        score: 16,
+        why: '字幕里给了三个工具的实测对比，还有具体结论。',
+        oneliner: '越像人的工具越难用',
+        comment: { want: true, text: '这刀接得真狠。' },
+      },
+    ],
+    skipped: [],
+    diary: { public: 'x', private: 'y' },
+  };
+
+  const on = validateRoundResult(base, { ...ctx, commentPlain: true, commentMaxChars: 150 });
+  assert.equal(on.ok, true);
+  if (on.ok) {
+    assert.equal(on.data.selected[0]?.comment?.text, '这刀接得真狠', '末尾句号要机械去掉');
+  }
+
+  const off = validateRoundResult(base, { ...ctx, commentPlain: false });
+  assert.equal(off.ok, true);
+  if (off.ok) assert.equal(off.data.selected[0]?.comment, undefined, '开关关着时模型写了也不收');
+
+  const wantFalse = validateRoundResult(
+    { ...base, selected: [{ ...base.selected[0], comment: { want: false, text: '不想发' } }] },
+    { ...ctx, commentPlain: true },
+  );
+  assert.equal(wantFalse.ok, true);
+  if (wantFalse.ok) assert.equal(wantFalse.data.selected[0]?.comment, undefined);
 });
 
 test('最终结果：渠道未开时丢掉 share，未知跳过原因归 other，超长文案被截断', () => {

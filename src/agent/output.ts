@@ -93,6 +93,25 @@ export interface RoundContext {
   shareChannels: string[];
   shareMaxChars: number;
   scoreMin: number;
+  /** 「不 @ 的评论」开关（share.comment.plain）；关着时模型写了也不收。 */
+  commentPlain?: boolean;
+  /** 「不 @ 的评论」字数上限（share.comment.maxChars）。 */
+  commentMaxChars?: number;
+}
+
+/** 「不 @ 的评论」：模型可能写字符串、也可能写 `{want,text}`；都容错。 */
+function normalizePlainComment(raw: unknown, ctx: RoundContext): { want: boolean; text: string } | null {
+  if (!ctx.commentPlain) return null;
+  const text = isObj(raw) ? str(raw.text).trim() : str(raw).trim();
+  const want = isObj(raw) && typeof raw.want === 'boolean' ? raw.want : text.length > 0;
+  if (!want || text.length < 2) return null;
+  const max = Math.max(20, ctx.commentMaxChars ?? 150);
+  return { want: true, text: clip(stripTrailingPeriod(text), max) };
+}
+
+/** 评论/聊天默认不加句号（真人很少打）——这里是机械兜底，prompt 里也说了。 */
+export function stripTrailingPeriod(text: string): string {
+  return text.replace(/[。．]\s*$/u, '').trim();
 }
 
 export function validateRoundResult(raw: unknown, ctx: RoundContext): Result<RoundResult> {
@@ -120,7 +139,15 @@ export function validateRoundResult(raw: unknown, ctx: RoundContext): Result<Rou
     if (oneliner.length < 2) return invalid(`selected[${idx}] 的 oneliner 太短`);
 
     const share = normalizeShare(entry.share, ctx);
-    selected.push({ bvid, score: clamp(num(entry.score), 0, 20), why: clip(why, 600), oneliner: clip(oneliner, 120), ...(share ? { share } : {}) });
+    const comment = normalizePlainComment(entry.comment, ctx);
+    selected.push({
+      bvid,
+      score: clamp(num(entry.score), 0, 20),
+      why: clip(why, 600),
+      oneliner: clip(oneliner, 120),
+      ...(share ? { share } : {}),
+      ...(comment ? { comment } : {}),
+    });
     if (selected.length >= Math.max(ctx.maxVideos, 1)) break;
   }
 

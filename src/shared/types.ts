@@ -131,6 +131,11 @@ export interface SelectedItem {
   why: string;
   oneliner: string;
   share?: ShareProposal;
+  /**
+   * 「不 @ 的评论」（share.comment.plain）：像普通观众那样在评论区说一句。
+   * 与 share 是两件事：share 是 @ 主人（通知），comment 是给所有观众看的。
+   */
+  comment?: { want: boolean; text: string };
 }
 
 export type SkipReason =

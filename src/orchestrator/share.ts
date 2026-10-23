@@ -580,3 +580,115 @@ export function summarizeShares(report: ShareReport): string {
 export function describeShareError(err: unknown): string {
   return `分享执行出错：${humanError(err)}`;
 }
+
+/* ---------------- 不 @ 的评论（P3：share.comment.plain） ---------------- */
+
+export interface PlainCommentItem {
+  bvid: string;
+  aid: number;
+  text: string;
+}
+
+export interface PlainCommentReport {
+  attempts: ShareAttempt[];
+  sent: number;
+  denied: number;
+  failed: number;
+  dryRun: number;
+  notes: string[];
+}
+
+/**
+ * 像普通观众那样发一条评论（不 @ 任何人）。
+ *
+ * 和分享的区别只有「给谁看」：分享=@ 主人（通知），这条=给评论区。
+ * 相同的是：同一套写开关/急停/风控冷却/幂等/字数，**独立额度**（plainDailyCap）。
+ * 一轮最多发一条：多了就像刷屏，不像人。
+ */
+export async function executePlainComments(
+  deps: ShareDeps,
+  input: { items: PlainCommentItem[]; dryRun: boolean; todayPlain: number },
+): Promise<PlainCommentReport> {
+  const now = deps.now ?? (() => new Date());
+  const cfg = deps.config;
+  const report: PlainCommentReport = { attempts: [], sent: 0, denied: 0, failed: 0, dryRun: 0, notes: [] };
+  const cap = cfg.share.comment.plainDailyCap;
+  let used = input.todayPlain;
+
+  for (const item of input.items.slice(0, 1)) {
+    const attempt: ShareAttempt = {
+      bvid: item.bvid,
+      aid: item.aid,
+      channel: 'comment',
+      status: 'denied',
+      content: item.text,
+      contentHash: '',
+      key: '',
+      deny: [],
+      notes: [],
+    };
+    report.attempts.push(attempt);
+
+    const deny: string[] = [];
+    if (!cfg.safety.writeEnabled) deny.push('总开关「允许写操作」是关着的');
+    if (cfg.safety.killSwitch) deny.push('急停开着');
+    if (!cfg.share.enabled) deny.push('分享开关关着');
+    if (!cfg.share.comment.plain) deny.push('「不 @ 的评论」这个开关关着');
+    if (cap <= 0) deny.push('这种评论的每日上限是 0');
+    if (used >= cap) deny.push(`今天这种评论已经发了 ${used} 条（上限 ${cap}）`);
+    if (deps.state.inRiskCooldown(now())) deny.push('风控冷却中');
+    const text = item.text.trim();
+    if (text.length === 0) deny.push('没有文案');
+    if (Array.from(text).length > cfg.share.comment.maxChars) deny.push(`超过 ${cfg.share.comment.maxChars} 字`);
+
+    const contentHash = contentHashOf(text);
+    const key = idempotencyKey({ bvid: item.bvid, action: 'comment', target: 'plain', contentHash });
+    attempt.contentHash = contentHash;
+    attempt.key = key;
+    if (deps.quota.hasSentContent(key)) deny.push('同样内容已经发过（幂等）');
+
+    if (deny.length > 0) {
+      attempt.deny.push(...deny);
+      report.denied += 1;
+      report.notes.push(`没发不@评论 ${item.bvid}：${deny.join('；')}`);
+      continue;
+    }
+
+    const at = localIso(now());
+    const outcome = await deps.writer.postComment({ bvid: item.bvid, aid: item.aid, message: text }, { dryRun: input.dryRun });
+    attempt.plan = outcome.plan;
+    if (!outcome.ok) {
+      attempt.status = 'failed';
+      attempt.error = outcome.error?.message ?? '发送失败';
+      report.failed += 1;
+      deps.quota.add({
+        at,
+        type: 'comment',
+        bvid: item.bvid,
+        aid: item.aid,
+        target: 'plain',
+        share: false,
+        status: 'failed',
+      });
+      report.notes.push(`不@评论发送失败 ${item.bvid}：${attempt.error}`);
+      continue;
+    }
+
+    used += 1;
+    attempt.status = input.dryRun ? 'dry_run' : 'sent';
+    deps.quota.add({
+      at,
+      type: 'comment',
+      bvid: item.bvid,
+      aid: item.aid,
+      target: 'plain',
+      share: false,
+      status: input.dryRun ? 'dry_run' : 'sent',
+    });
+    report.notes.push(input.dryRun ? `预演：会发一条不 @ 的评论（${item.bvid}）` : `发了不 @ 的评论 ${item.bvid}`);
+    if (input.dryRun) report.dryRun += 1;
+    else report.sent += 1;
+  }
+
+  return report;
+}

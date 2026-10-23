@@ -392,6 +392,13 @@ export const SPEC = {
           fields: {
             maxChars: { kind: 'number', label: '最多几个字（20–500）', desc: '超过会被 B 站截断，不如自己写短点', default: 150, min: 20, max: 500, int: true },
             atOwner: { kind: 'boolean', label: '带上 @ 你', desc: '关掉就不 @ 你，你可能根本看不到这条', default: true },
+            plain: {
+              kind: 'boolean',
+              label: '不 @ 的时候也发一条评论',
+              desc: '像普通观众那样在评论区说一句（不 @ 任何人）；和「发评论 @ 你」是两件事，默认关',
+              default: false,
+            },
+            plainDailyCap: { kind: 'number', label: '一天最多发几条这种评论（0–3）', desc: '单独计数，不占「@ 你」的额度', default: 1, min: 0, max: 3, int: true },
           },
         },
         dm: {
