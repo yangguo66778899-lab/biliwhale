@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { composeComments, composeDiary } from '../src/orchestrator/compose.ts';
+import { buildDiaryPrompt } from '../src/orchestrator/prompts.ts';
 import { LlmClient } from '../src/llm/client.ts';
 import { Logger } from '../src/shared/logger.ts';
 import { validateConfig } from '../src/config/validate.ts';
@@ -91,4 +92,18 @@ test('写日记：解析两段，并把表情码机械清掉', async () => {
   });
   assert.equal(/\[[^\]]+\]/u.test(result.diary.public), false, '日记里不该有表情码');
   assert.equal(result.diary.private, '下次多看这种');
+});
+
+test('日记提示词带 few-shot 样例和「学写法不学事实」的口径', () => {
+  const prompt = buildDiaryPrompt({
+    date: '2026-10-24',
+    watched: [{ title: '测试视频', up: 'UP', oneLine: '一句话' }],
+    persona: '我叫鲸鲸',
+  });
+  assert.match(prompt, /黏土捏小蛋糕/u, '样例要真的进来（用户给的 9 篇）');
+  assert.match(prompt, /学写法，不学事实/u);
+  assert.match(prompt, /不用交代视频讲了什么/u);
+  assert.match(prompt, /截屏存图、下载、搜索这种别写成做过/u);
+  // 正例里那两条老样例（油泼面 / 出租屋）已被用户换掉，不该再出现
+  assert.equal(prompt.includes('油泼面'), false);
 });

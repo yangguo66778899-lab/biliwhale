@@ -5,12 +5,28 @@
  * 不做什么：不调模型、不做校验（校验在 agent/output.ts）。
  */
 
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import type { Config } from '../config/spec.ts';
 import type { Candidate, CommentItem, DeepRead, LightRead, ScreenItem } from '../shared/types.ts';
 import { BILI_EMOJI } from '../shared/biliEmoji.ts';
 
 /** 深读阶段塞进 prompt 的字幕上限（工具里还能要更长的）。 */
 const DEEP_SUBTITLE_PROMPT_CHARS = 6000;
+
+/** 日记 few-shot 样例（用户写的 9 篇；只学写法，不学事实）。 */
+const EXAMPLES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'prompts', 'examples');
+
+function loadDiarySamples(): string {
+  try {
+    return fs.readFileSync(path.join(EXAMPLES_DIR, 'diary-samples.md'), 'utf8').trim();
+  } catch {
+    return '';
+  }
+}
+
 
 export function buildScreenPrompt(input: {
   lightReads: LightRead[];
@@ -323,6 +339,7 @@ export interface DiaryPromptInput {
 
 /** 两本日记：一次调用，只输出这两段。 */
 export function buildDiaryPrompt(input: DiaryPromptInput): string {
+  const samples = loadDiarySamples();
   const materials = input.material
     ? [
         '# 你想记的那条',
@@ -352,6 +369,25 @@ export function buildDiaryPrompt(input: DiaryPromptInput): string {
     '- 几行就够了，不用凑长度。',
     ...voiceRules(),
     '',
+    ...(samples
+      ? [
+          '# 以前写过的几篇（学写法，不学事实）',
+          '',
+          '这些是以前记的。借它们说明「怎么写」：句子长短、口语、「我本来…结果」、结尾落在生活动作上。',
+          '里面看到什么、做了什么**不要照抄**——那是那几天的事。',
+          '',
+          samples,
+          '',
+          '# 用的时候注意',
+          '',
+          '1. 学写法，不学事实：具体看到什么，以这一轮材料为准。',
+          '2. 没给画面就别写画面细节。「看着真香」是反应，可以写；「他锅里放了三个蛋」是事实，材料里没有就不写。',
+          '3. 不写「字幕里说…」「简介里写着…」这种来源标注——那是报告腔。',
+          '4. 里面工具做不到的动作（「点进主页」），换成你真做过的（看评论、看简介），或者直接删掉。',
+          '5. 你真正做过的事只有：看视频、评论、点赞、发动态、跟主人说话。截屏存图、下载、搜索这种别写成做过。',
+          '',
+        ]
+      : []),
     '只输出这个 JSON：',
     '```json',
     JSON.stringify({ public: '给主人看的一段', private: '给自己看的一段' }, null, 2),
