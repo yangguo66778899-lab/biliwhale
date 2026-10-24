@@ -261,7 +261,9 @@ export function buildCommentPrompt(input: CommentPromptInput): string {
   const comments = input.deep.comments.slice(0, 4);
 
   return [
-    ...(input.persona.trim() ? ['# 你是', input.persona.trim(), ''] : []),
+    // 人设原文直接贴着材料给，不加「# 你是」这种小标题：
+    // 一是人称不该被标题绑死（用户可能用第一/第二/第三人称写），二是人设本身就是语料。
+    ...(input.persona.trim() ? [input.persona.trim(), ''] : []),
     '# 你刚看完这条',
     `- 标题：${v.title}`,
     `- UP：${v.owner.name} · 时长 ${Math.round(v.durationSec / 60)} 分钟`,
@@ -320,7 +322,7 @@ export function buildDiaryPrompt(input: DiaryPromptInput): string {
     : [];
 
   return [
-    ...(input.persona.trim() ? ['# 你是', input.persona.trim(), ''] : []),
+    ...(input.persona.trim() ? [input.persona.trim(), ''] : []),
     `# ${input.date} 今天看完的`,
     ...input.watched.map((item) => `- ${item.title}（${item.up}）：${item.oneLine}`),
     '',
