@@ -25,6 +25,7 @@ import { RoundRunner } from './runner.ts';
 import { Scheduler, toDayPlan } from './scheduler.ts';
 import { createHandlers } from './api.ts';
 import { ListenLoop } from './listen.ts';
+import { runDailyDynamicIfDue } from '../orchestrator/dynamic.ts';
 import { ConfigWatcher } from './configWatch.ts';
 import { LoginService } from '../account/login.ts';
 import { summarizePlan, pendingSlots } from '../scheduler/tick.ts';
@@ -246,6 +247,12 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonStart> {
     void scheduler.tickOnce().catch((err: unknown) => {
       logger.error('daemon', `调度 tick 未捕获异常：${humanError(err)}`);
     });
+    // 日更动态：和看视频那一轮分开，到点补一条（一天一次，失败也不重试）
+    if (!opts.fixtures) {
+      void runDailyDynamicIfDue(ctx).catch((err: unknown) => {
+        logger.error('daemon', `日更动态未捕获异常：${humanError(err)}`);
+      });
+    }
   }, tickMs);
   const heartbeatTimer = setInterval(() => {
     try {
@@ -299,6 +306,12 @@ export async function startDaemon(opts: DaemonOptions): Promise<DaemonStart> {
   // 起来先 tick 一次：让计划立刻生成、状态接口马上有下一步时间
   await scheduler.tickOnce();
   heartbeat();
+  // 错过当天的动态就在启动时补一条（例如默认 00:00、白天才开机）
+  if (!opts.fixtures) {
+    await runDailyDynamicIfDue(ctx).catch((err: unknown) => {
+      logger.error('daemon', `启动时补发动态失败：${humanError(err)}`);
+    });
+  }
 
   logger.info('daemon', `守护进程就绪：${started.url}（数据目录 ${paths.dataDir}）`);
   logger.event('daemon', '守护进程已启动', { target: 'daemon', data: { port: started.port, pid: process.pid } });

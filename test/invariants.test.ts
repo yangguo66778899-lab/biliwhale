@@ -141,7 +141,11 @@ test('写调用分散到各自的执行器：评论/收藏/点赞/私信/动态�
   );
 
   const dynamicWrites = grep(SOURCE_FILES, /\.postDynamic\(/);
-  assert.deepEqual(dynamicWrites.filter((hit) => path.basename(hit.file) !== 'like.ts'), [], '发动态只许在 like.ts（手动 + 二次确认）');
+  assert.deepEqual(
+    dynamicWrites.filter((hit) => !['like.ts', 'dynamic.ts'].includes(path.basename(hit.file))),
+    [],
+    '发动态只许在 like.ts（面板手动 + 二次确认）和 dynamic.ts（日更：自己过闸门与幂等）',
+  );
 
   // 分享执行器里必须同时出现闸门与幂等（防止有人绕过）
   const shareText = fs.readFileSync(path.join(SRC, 'orchestrator', 'share.ts'), 'utf8');

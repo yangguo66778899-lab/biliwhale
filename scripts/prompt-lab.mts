@@ -49,6 +49,8 @@ interface LabArgs {
   fixtures: boolean;
   out: string;
   model?: string;
+  /** 指定人设文件（对照实验用）；不给就读数据目录里那份。 */
+  persona?: string;
 }
 
 function parseArgs(argv: string[]): LabArgs {
@@ -66,8 +68,9 @@ function parseArgs(argv: string[]): LabArgs {
     else if (arg === '--fixtures') args.fixtures = true;
     else if (arg === '--out') args.out = next();
     else if (arg === '--model') args.model = next();
+    else if (arg === '--persona') args.persona = next();
     else if (arg === '--help' || arg === '-h') {
-      console.log('用法：npm run prompt:lab -- [--times 3] [--videos 2] [--fixtures] [--model deepseek-chat] [--out 目录]');
+      console.log('用法：npm run prompt:lab -- [--times 3] [--videos 2] [--fixtures] [--model deepseek-chat] [--persona 人设文件] [--out 目录]');
       process.exit(0);
     } else throw new Error(`不认识的参数：${arg}`);
   }
@@ -191,10 +194,12 @@ async function main(): Promise<void> {
 
   // 人设和内核同源：读 <数据目录>/prompts/persona.md（没有就用内置默认）。
   // 这样用户写完人设，直接跑 lab 就能看到效果，不用改脚本。
+  // --persona 用来做对照实验（同一份内容三种人称各跑一遍）。
   const labPaths = resolvePaths(process.env.BILIWHALE_DATA_DIR ? { dataDir: process.env.BILIWHALE_DATA_DIR } : {});
   const assets = loadPromptAssets(labPaths, config);
-  const persona = assets.persona;
-  console.log(assets.personaSource === 'default' ? '人设：内置默认（还没写 prompts/persona.md）' : `人设：${assets.personaFile}`);
+  const persona = args.persona ? fs.readFileSync(args.persona, 'utf8').trim() : assets.persona;
+  if (args.persona) console.log(`人设：${args.persona}（对照实验）`);
+  else console.log(assets.personaSource === 'default' ? '人设：内置默认（还没写 prompts/persona.md）' : `人设：${assets.personaFile}`);
 
   const llm = new LlmClient({
     apiKey,

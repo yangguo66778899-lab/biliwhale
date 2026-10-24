@@ -69,6 +69,10 @@ export interface AppStateFile {
    * 写请求自己撞 412 时仍走 `riskCooldownUntil`（那是真的该停手）。
    */
   readCooldownUntil?: string | null;
+  /** 「今天那条动态」发过没有（本地日期）：一天只自动发一条。 */
+  lastDynamicDate?: string | null;
+  /** 最近一次动态的尝试时间（ISO，含被拒/失败），用于排障与面板显示。 */
+  lastDynamicAt?: string | null;
 }
 
 export function emptyState(): AppStateFile {
@@ -215,6 +219,17 @@ export class AppStateStore {
     const until = this.store.get().readCooldownUntil;
     if (!until) return false;
     return Date.parse(until) > now.getTime();
+  }
+
+  /** 今天那条动态发过没有（本地日期字符串）。 */
+  lastDynamicDate(): string | null {
+    return this.store.get().lastDynamicDate ?? null;
+  }
+
+  /** 记一次动态尝试（成功、预演、被拒都记；一天只发一条靠日期判断）。 */
+  markDynamic(atIso: string): void {
+    const date = atIso.slice(0, 10);
+    this.update((state) => ({ ...state, lastDynamicDate: date, lastDynamicAt: atIso }));
   }
 
   /* ---------- 作息计划 ---------- */

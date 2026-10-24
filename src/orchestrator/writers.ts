@@ -312,6 +312,23 @@ export function appendNotifyLog(paths: Paths, text: string, at: Date = new Date(
   return paths.notifyLog;
 }
 
+/**
+ * 日更动态写进当天的报告（单独一节，排在所有轮之后）。
+ * 为什么写进报告：用户翻报告时应该能看见「今天她发/没发动态、发了什么」，不用去翻日志。
+ */
+export function appendDynamicNote(
+  paths: Paths,
+  input: { date: string; at: string; text?: string; reason?: string; dryRun: boolean },
+): string {
+  const file = reportFile(paths, input.date);
+  ensureHeader(file, `# ${input.date} · 今日刷到的`, '> 这一天她醒了几次、看了几条、挑中几条、花了多少 token。多轮会往下追加。');
+  const body = input.text
+    ? `${input.dryRun ? '（预演，没真发）\n\n' : ''}${input.text.trim()}`
+    : `没发：${input.reason ?? '原因不明'}`;
+  appendText(file, `\n### 动态（${input.at}）\n\n${body}\n`);
+  return file;
+}
+
 export function skipReasonText(reason: string): string {
   switch (reason) {
     case 'no_subtitle':
