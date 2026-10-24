@@ -46,7 +46,8 @@ export interface DynamicPromptInput {
 
 export function buildDynamicPrompt(input: DynamicPromptInput): string {
   const lines: string[] = [
-    ...(input.persona.trim() ? ['# 你是', input.persona.trim(), ''] : []),
+    // 人设原文直接贴，不加标题（人称随用户，标题会把它绑死）
+    ...(input.persona.trim() ? [input.persona.trim(), ''] : []),
     `# 今天（${input.date}）`,
     input.reportText.trim() ? input.reportText.trim() : '（今天还没跑过看视频那一轮，或者什么都没看到）',
     '',
@@ -109,7 +110,7 @@ export async function composeDailyDynamic(
   const prompt = buildDynamicPrompt({ ...input, persona: deps.persona });
   const completion = await deps.llm.chat({
     messages: [
-      { role: 'system', content: '你在写一条 B 站动态。只输出 JSON，不要解释。' },
+      { role: 'system', content: '用户消息开头是她的自我介绍，按那个说话。你在写一条 B 站动态，只输出 JSON，不要解释。' },
       { role: 'user', content: prompt },
     ],
     maxTokens: 1600,

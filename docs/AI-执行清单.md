@@ -15,7 +15,7 @@
 | 版本 | `package.json` `0.7.1`；`src/cli.ts` `VERSION = '0.7.1'` |
 | 运行时 | Node 24（strip-only TS，`.ts` 直接跑）；**零运行时依赖**；devDeps 仅 typescript + @types/node |
 | 校验命令 | `npx tsc --noEmit`（必须无输出） |
-| 测试 | `npm test` → **344 个用例，0 失败**（Node test runner，`--test-isolation=none`） |
+| 测试 | `npm test` → **376 个用例，0 失败**（Node test runner，`--test-isolation=none`） |
 | 离线整轮 | `npm run offline`（= `run --now --dry --fixtures --data-dir .run/offline`） |
 | 打包 | `npm run pack` → `dist/BiliWhale-<版本>/` + `-portable.zip` |
 | 安装演练 | `npm run rehearse`（13 项断言，不需要虚拟机） |

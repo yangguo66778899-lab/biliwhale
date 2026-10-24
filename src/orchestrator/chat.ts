@@ -129,7 +129,8 @@ export function buildChatPrompt(
   const maxChars = deps.config.listen.dm.maxChars;
   const limitedVideos = input.context.videos.slice(0, 5);
   const system = [
-    `你是「${persona.name}」。和主人私下聊天。`,
+    // 名字没填时别渲染成「你是「」」——人设里可能写了自己的名字
+    persona.name.trim() ? `你是「${persona.name.trim()}」。和主人私下聊天。` : '你在和主人私下聊天。',
     `主人怎么称呼：${persona.ownerTitle}；你自称：${persona.selfClaim}。`,
     '',
     '规则（必须遵守）：',

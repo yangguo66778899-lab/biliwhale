@@ -65,7 +65,8 @@ export async function composeComments(
 
   const completion = await deps.llm.chat({
     messages: [
-      { role: 'system', content: '你在替一个人写两句评论。只输出 JSON，不要解释。' },
+      // 用户消息开头是她的自我介绍（人设）：明确告诉模型那是「她自己」，不是材料的一部分
+      { role: 'system', content: '用户消息开头是她的自我介绍，按那个说话。你在替她写两句评论，只输出 JSON，不要解释。' },
       { role: 'user', content: prompt },
     ],
     maxTokens: 400,
@@ -128,7 +129,7 @@ export async function composeDiary(
 
   const completion = await deps.llm.chat({
     messages: [
-      { role: 'system', content: '你在写两段日记。只输出 JSON，不要解释。' },
+      { role: 'system', content: '用户消息开头是她的自我介绍，按那个说话。你在写两段日记，只输出 JSON，不要解释。' },
       { role: 'user', content: prompt },
     ],
     maxTokens: 1200,
