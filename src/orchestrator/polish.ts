@@ -94,9 +94,12 @@ export async function polishResult(
     return done(next, notes);
   }
 
-  // 降级路径（模型已经两次不可用）不再花钱调第三次：只做机械修，问题留给下次
+  // 重写没开（或降级轮）：只做机械修。**不往报告里塞「还有 N 处不合口径」**——
+  // 用户看不到重写这回事，写了只会让人以为出了错；真要查，看日志。
   if (options.allowRewrite === false) {
-    notes.push(`日记/评论还有 ${rewriteNeeded.length} 处不合口径（这次不再重写）`);
+    deps.logger.debug('polish', `还有 ${rewriteNeeded.length} 处不合口径（重写未开启，只记录）`, {
+      keys: rewriteNeeded.map((issue) => issue.key),
+    });
     return done(next, notes);
   }
 

@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 
 import { applyMechanicalFixes, rewriteInstruction, selfCheck } from '../src/agent/selfCheck.ts';
 
@@ -66,4 +67,55 @@ test('自检：重写指令只列 rewrite 项，并附上口径', () => {
   assert.equal(text.includes('末尾有句号'), false, '机械修的不该进重写指令');
   assert.match(text, /末尾不加句号/);
   assert.match(text, /只输出 JSON/);
+});
+
+test('自检：套话黑名单只留总结/公文类，用户正例里的「温柔」不算问题', () => {
+  const politeness = selfCheck({ ...BASE, diary: { ...BASE.diary, public: '感觉是个很温柔的人呢。' } });
+  assert.deepEqual(politeness, [], '文艺腔词表已删掉，「温柔」不该判不合格');
+
+  const cliche = selfCheck({ ...BASE, diary: { ...BASE.diary, public: '总的来说，这条值得一看。' } });
+  assert.ok(cliche.some((issue) => issue.key === 'diary-public-blacklist'));
+});
+
+test('自检：单句超过 70 字才报，64 字的长句放行（用户正例就有一句）', () => {
+  const ok65 = '看'.repeat(65);
+  const ok = selfCheck({ ...BASE, diary: { ...BASE.diary, public: ok65 } });
+  assert.equal(ok.some((issue) => issue.key === 'diary-public-sentence'), false, '70 字以内不报');
+
+  const tooLong = '看'.repeat(71);
+  const flagged = selfCheck({ ...BASE, diary: { ...BASE.diary, public: tooLong } });
+  assert.ok(flagged.some((issue) => issue.key === 'diary-public-sentence'));
+});
+
+test('自检：用户 9 篇正例全部不判不合格（含 64 字长句那篇）', () => {
+  const raw = fs.readFileSync(new URL('../src/prompts/examples/diary-samples.md', import.meta.url), 'utf8');
+  const samples = raw
+    .split(/^第 \d+ 篇$/mu)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  assert.equal(samples.length, 9, '正例应该是 9 篇');
+  for (const [index, text] of samples.entries()) {
+    const issues = selfCheck({ ...BASE, diary: { ...BASE.diary, public: text } }).filter(
+      (issue) => !issue.key.startsWith('diary-private'),
+    );
+    assert.deepEqual(
+      issues,
+      [],
+      `第 ${index + 1} 篇被判不合格：${issues.map((issue) => issue.message).join('；')}`,
+    );
+  }
+});
+
+test('自检：写了工具做不到的动作 / 来源标注超过 2 处 / 结尾鸡汤 都要重写', () => {
+  const fake = selfCheck({ ...BASE, diary: { ...BASE.diary, public: '我又点进主页看了他别的视频。' } });
+  assert.ok(fake.some((issue) => issue.key === 'diary-public-fake-action'));
+
+  const sources = selfCheck({
+    ...BASE,
+    diary: { ...BASE.diary, public: '字幕里说挺好，简介里写着流程，标题提到效率。' },
+  });
+  assert.ok(sources.some((issue) => issue.key === 'diary-public-source'));
+
+  const tail = selfCheck({ ...BASE, diary: { ...BASE.diary, public: '看完挺开心的。也许这就是生活吧。' } });
+  assert.ok(tail.some((issue) => issue.key === 'diary-public-tail'));
 });
