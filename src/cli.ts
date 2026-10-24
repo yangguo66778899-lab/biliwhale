@@ -57,7 +57,7 @@ interface ParsedArgs {
   unknown: string[];
 }
 
-const VERSION = '0.7.1';
+const VERSION = '0.7.2';
 
 function parseArgs(argv: string[]): ParsedArgs {
   const args: ParsedArgs = {

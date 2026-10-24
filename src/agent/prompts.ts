@@ -58,6 +58,14 @@ function bundled(name: string): string {
   return readIfExists(path.join(BUNDLED_DIR, name)) ?? '';
 }
 
+/**
+ * 读一份随包发布的提示词（不能改的模板，例如 chat.md）。
+ * 和 system.md 的区别：system.md 首次启动会拷到数据目录让用户改；chat.md 只读内置。
+ */
+export function loadBundledPrompt(name: string): string {
+  return bundled(name);
+}
+
 /** 读取本轮的提示词资产（缺文件全部走内置默认，不报错）。 */
 export function loadPromptAssets(paths: Paths, config: Config): PromptAssets {
   const systemFile = path.join(paths.promptsDir, 'system.md');

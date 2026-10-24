@@ -40,7 +40,18 @@ export interface HealthPayload {
 export interface StatusPayload {
   scheduler: { plan: string; paused: boolean; nextWakeAt: string | null; planSource: string | null };
   lastRun: { id: string; status: string; endedAt: string | null; tokens: number } | null;
-  today: { wakes: number; targetWakes: number; shares: number; shareCap: number; tokens: number; costCny: number };
+  today: {
+    wakes: number;
+    targetWakes: number;
+    shares: number;
+    shareCap: number;
+    /** 日更动态：今天发没发、几点发的、上限（0 = 动态开关关着）。 */
+    dynamicPosted?: boolean;
+    dynamicAt?: string | null;
+    dynamicCap?: number;
+    tokens: number;
+    costCny: number;
+  };
   account: { loggedIn: boolean; name?: string; mid?: number };
   /** 首次配置清单：缺什么、去哪补（概览页顶部会显示）。 */
   setup?: {

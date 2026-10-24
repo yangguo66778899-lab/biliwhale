@@ -14,6 +14,7 @@ import type { AppContext } from '../bootstrap.ts';
 import type { Config } from '../config/spec.ts';
 import type { LlmClient } from '../llm/client.ts';
 import { loadPromptAssets } from '../agent/prompts.ts';
+import { voiceRules } from './prompts.ts';
 import { appendDynamicNote, diaryFile, reportFile } from './writers.ts';
 import { DynamicLog } from '../state/dynamicLog.ts';
 import { idempotencyKey, contentHashOf } from './share.ts';
@@ -68,8 +69,9 @@ export function buildDynamicPrompt(input: DynamicPromptInput): string {
     '今天有没有想说的？有就多说几句；如果有具体的事、具体的句子，就写进去。',
     '没什么可说也没关系——用自己的语气说说为什么没什么可说（几行就行）。**不要跳过**，也别硬凑。',
     `长度：一般 ${input.minChars}–${input.maxChars} 字；短一点可以，但别写成打卡。`,
-    '- 不 @ 任何人；不带链接；不写「本轮/候选/评分/额度」这类账。',
+    '- 不 @ 任何人；不带链接。',
     '- 别和最近发过的重复；同样的意思换个说法也不行。',
+    ...voiceRules(),
     '',
     '只输出这个 JSON：',
     '```json',

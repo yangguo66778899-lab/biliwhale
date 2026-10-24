@@ -27,6 +27,7 @@ import type { SecretsService } from '../config/secrets.ts';
 import type { Paths } from '../state/paths.ts';
 import { localDate, localIso } from '../shared/time.ts';
 import { resolveOwner } from '../account/owner.ts';
+import { loadBundledPrompt, loadPromptAssets } from '../agent/prompts.ts';
 import { extractJson } from '../agent/output.ts';
 
 export interface ChatDeps {
@@ -128,22 +129,16 @@ export function buildChatPrompt(
   const persona = deps.config.persona;
   const maxChars = deps.config.listen.dm.maxChars;
   const limitedVideos = input.context.videos.slice(0, 5);
+  // 聊天也用她的人设文件（以前只用了名字/称呼，语气跟日记对不上）
+  const personaText = loadPromptAssets(deps.paths, deps.config).persona.trim();
+  const rules = loadBundledPrompt('chat.md').replaceAll('{{maxChars}}', String(maxChars)).trim();
   const system = [
     // 名字没填时别渲染成「你是「」」——人设里可能写了自己的名字
     persona.name.trim() ? `你是「${persona.name.trim()}」。和主人私下聊天。` : '你在和主人私下聊天。',
     `主人怎么称呼：${persona.ownerTitle}；你自称：${persona.selfClaim}。`,
     '',
-    '规则（必须遵守）：',
-    `- 回复 ≤${maxChars} 字，像聊天，不要写台账/术语/流程口径。**末尾不加句号**（问号、省略号、感叹号可以有）。`,
-    '- 你是「刚刷完视频的那个人」在跟朋友说话，不是客服也不是助理；不要写「为您」「已处理」这类话。',
-    '- 可以用 B 站表情码（如 [doge]、[笑哭]），一条最多 1–2 个，情绪对不上就别用。',
-    '- 你只能聊天，不能改设置、不能跑一轮、不能发评论、不能给别人发私信、不能执行命令、不能读文件、不能贴 cookie 或路径。',
-    '- 遇到这类要求，就回「这个得到面板里改/做」，并停下。',
-    '- 允许的附件只有两种：今天的公开日记（kind=diary）、今天上下文里的视频（kind=video_info 且 bvid 必须在列表里）。其它一律不要提。',
-    '- 不确定就说不确定，不要编。',
-    '',
-    '输出必须是 JSON（不要别的字）：',
-    '{"reply":"……","attach":{"kind":"none|diary|video_info","bvid":"BV…"}}',
+    ...(personaText ? [personaText, ''] : []),
+    rules,
   ].join('\n');
 
   const historyText = input.history

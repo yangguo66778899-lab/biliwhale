@@ -152,6 +152,10 @@ export function createHandlers(deps: PanelDeps): AllHandlers {
           targetWakes: state.today?.targetWakes ?? 0,
           shares: ctx.quota.sharesOn(today),
           shareCap: Math.min(silence.shareCap, cfg.share.dailyCap),
+          // 日更动态：面板要能看出「今天发没发、几点发」
+          dynamicPosted: state.lastDynamicDate === today,
+          dynamicAt: state.lastDynamicDate === today ? (state.lastDynamicAt ?? null) : null,
+          dynamicCap: cfg.dynamic.enabled ? cfg.dynamic.dailyCap : 0,
           tokens: state.budget.tokens,
           costCny: state.budget.costCny,
         },

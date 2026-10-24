@@ -146,6 +146,18 @@ function fmtAgo(iso) {
   return `${Math.round(sec / 86400)} 天前`;
 }
 
+/** 概览「今日」行里的动态：开关关着 / 今天发过（几点）/ 还没到点。 */
+function dynamicTodayText(today) {
+  if (!today.dynamicCap) return '关着';
+  if (today.dynamicPosted) {
+    const at = today.dynamicAt ? new Date(today.dynamicAt) : null;
+    const hh = at ? String(at.getHours()).padStart(2, '0') : '';
+    const mm = at ? String(at.getMinutes()).padStart(2, '0') : '';
+    return hh ? `今天发过（${hh}:${mm}）` : '今天发过';
+  }
+  return `今天还没发（上限 ${today.dynamicCap}）`;
+}
+
 /* ---------------- 极简 Markdown ---------------- */
 
 function escapeHtml(text) {
@@ -263,7 +275,7 @@ async function renderOverview(options = {}) {
     el('div', { class: 'row' }, [el('span', {}, ['作息']), el('span', {}, [status.scheduler.plan || '—'])]),
     el('div', { class: 'row' }, [el('span', {}, ['下一次']), el('span', {}, [fmtWhen(status.scheduler.nextWakeAt)])]),
     el('div', { class: 'row' }, [el('span', {}, ['最近一轮']), el('span', {}, [status.lastRun ? `${status.lastRun.status} · ${fmtAgo(status.lastRun.endedAt)} · ${status.lastRun.tokens} token` : '还没跑过'])]),
-    el('div', { class: 'row' }, [el('span', {}, ['今日']), el('span', {}, [`醒 ${status.today.wakes}/${status.today.targetWakes} 次 · 分享 ${status.today.shares}/${status.today.shareCap} 条`])]),
+    el('div', { class: 'row' }, [el('span', {}, ['今日']), el('span', {}, [`醒 ${status.today.wakes}/${status.today.targetWakes} 次 · 分享 ${status.today.shares}/${status.today.shareCap} 条 · 动态 ${dynamicTodayText(status.today)}`])]),
     el('div', { class: 'row' }, [el('span', {}, ['今日花费']), el('span', {}, [status.today.costCny > 0 ? `¥${status.today.costCny}` : `${status.today.tokens} token`])]),
     el('div', { class: 'row' }, [el('span', {}, ['账号']), el('span', {}, [status.account.loggedIn ? status.account.name || '已登录' : '未登录（去「账号」页扫码）'])]),
     el('div', { class: 'row' }, [el('span', {}, ['模型']), el('span', {}, [status.model.actual || status.model.configured])]),
@@ -870,10 +882,14 @@ function openDynamicDialog(defaultText) {
       ? el('div', { class: 'issue warn', text: '现在是一律预演：点「确认发出去」也只会打印，不会真的发。' })
       : null;
   const card = el('div', { class: 'modal' }, [
-    el('h3', {}, ['发一条动态']),
+    el('h3', {}, ['发一条动态（手动）']),
     el('div', {
       class: 'hint',
       text: '发出去只能整条删掉，改不了。文案可以直接改；不想要哪一行就删掉。',
+    }),
+    el('div', {
+      class: 'hint',
+      text: '这是你手动发的一条，和每天定时那条分开记：手动发不占「一天一条」的名额，但同样会过写开关和风控。',
     }),
     dryHint,
     area,
