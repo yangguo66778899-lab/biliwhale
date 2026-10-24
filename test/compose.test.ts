@@ -106,4 +106,7 @@ test('日记提示词带 few-shot 样例和「学写法不学事实」的口径'
   assert.match(prompt, /截屏存图、下载、搜索这种别写成做过/u);
   // 正例里那两条老样例（油泼面 / 出租屋）已被用户换掉，不该再出现
   assert.equal(prompt.includes('油泼面'), false);
+  // 用户明确删掉的两条「死板规则」不该再写进提示词
+  assert.equal(prompt.includes('我本来…结果'), false, '别把「我本来…结果」写成要求');
+  assert.equal(prompt.includes('生活动作'), false, '别把「结尾落在生活动作上」写成要求');
 });

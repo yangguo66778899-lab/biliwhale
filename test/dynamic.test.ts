@@ -70,6 +70,10 @@ test('日更：提示词里有今天的报告/日记/最近动态，并且明确
   assert.match(prompt, /不要跳过/);
   assert.match(prompt, /不 @ 任何人/);
   assert.match(prompt, /100–1000 字/);
+  // 动态以前没有正例；现在和日记共用同一批（用户给的 9 篇），但只交代语气、不规定句式
+  assert.match(prompt, /黏土捏小蛋糕/u, '动态也要有正例');
+  assert.equal(prompt.includes('我本来…结果'), false, '别把句式写成死规矩');
+  assert.equal(prompt.includes('生活动作'), false);
 });
 
 test('日更：预演不占额度、真发记账、同内容不重复发', async () => {

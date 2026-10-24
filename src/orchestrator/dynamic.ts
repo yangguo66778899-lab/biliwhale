@@ -14,7 +14,7 @@ import type { AppContext } from '../bootstrap.ts';
 import type { Config } from '../config/spec.ts';
 import type { LlmClient } from '../llm/client.ts';
 import { loadPromptAssets } from '../agent/prompts.ts';
-import { voiceRules } from './prompts.ts';
+import { fewShotSection, voiceRules } from './prompts.ts';
 import { appendDynamicNote, diaryFile, reportFile } from './writers.ts';
 import { DynamicLog } from '../state/dynamicLog.ts';
 import { idempotencyKey, contentHashOf } from './share.ts';
@@ -73,6 +73,8 @@ export function buildDynamicPrompt(input: DynamicPromptInput): string {
     '- 别和最近发过的重复；同样的意思换个说法也不行。',
     ...voiceRules(),
     '',
+    // 动态以前没有正例：和日记共用同一批样例（用户 2026-10-24 给的 9 篇），只交代语气，不规定句式
+    ...fewShotSection('这些是平时记的，动态也照这个语气写；不必整段照搬它们的结构。'),
     '只输出这个 JSON：',
     '```json',
     JSON.stringify({ text: '动态正文' }, null, 2),
