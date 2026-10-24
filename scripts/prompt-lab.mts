@@ -20,6 +20,7 @@ import path from 'node:path';
 import { validateConfig } from '../src/config/validate.ts';
 import { SecretsService } from '../src/config/secrets.ts';
 import { resolvePaths } from '../src/state/paths.ts';
+import { loadPromptAssets } from '../src/agent/prompts.ts';
 import { buildCommentPrompt, buildDiaryPrompt } from '../src/orchestrator/prompts.ts';
 import { composeComments, composeDiary } from '../src/orchestrator/compose.ts';
 import { LlmClient } from '../src/llm/client.ts';
@@ -187,6 +188,14 @@ async function main(): Promise<void> {
 
   const logger = labLogger();
   const apiKey = resolveApiKey(logger, args.fixtures);
+
+  // 人设和内核同源：读 <数据目录>/prompts/persona.md（没有就用内置默认）。
+  // 这样用户写完人设，直接跑 lab 就能看到效果，不用改脚本。
+  const labPaths = resolvePaths(process.env.BILIWHALE_DATA_DIR ? { dataDir: process.env.BILIWHALE_DATA_DIR } : {});
+  const assets = loadPromptAssets(labPaths, config);
+  const persona = assets.persona;
+  console.log(assets.personaSource === 'default' ? '人设：内置默认（还没写 prompts/persona.md）' : `人设：${assets.personaFile}`);
+
   const llm = new LlmClient({
     apiKey,
     baseUrl: process.env.BILIWHALE_BASE_URL ?? 'https://api.deepseek.com',
@@ -220,7 +229,7 @@ async function main(): Promise<void> {
         why: item.why,
         oneliner: item.oneliner,
         ownerName: '你',
-        persona: '',
+        persona: persona,
         maxChars: config.share.comment.maxChars,
         wantPlain: true,
         wantShare: true,
@@ -233,7 +242,7 @@ async function main(): Promise<void> {
         date: '2026-10-23',
         watched: [{ title: fixture.title, up: fixture.up, oneLine: item.oneliner, why: item.why }],
         material: { title: fixture.title, subtitle: fixture.subtitle ?? '', comments: deepReads[0]?.comments ?? [] },
-        persona: '',
+        persona: persona,
       }),
       'utf8',
     );
@@ -242,10 +251,10 @@ async function main(): Promise<void> {
       const dir = path.join(dirV, `run-${run}`);
       fs.mkdirSync(dir, { recursive: true });
       const comment = await composeComments(
-        { llm, logger, persona: '' },
+        { llm, logger, persona: persona },
         { item, deep: deepReads[0] as never, config, ownerName: '你' },
       );
-      const diary = await composeDiary({ llm, logger, persona: '' }, { date: '2026-10-23', result: { selected: [item], skipped: [] } as never, deepReads });
+      const diary = await composeDiary({ llm, logger, persona: persona }, { date: '2026-10-23', result: { selected: [item], skipped: [] } as never, deepReads });
       fs.writeFileSync(path.join(dir, 'comment.md'), comment.plainText || '（这轮没写评论）', 'utf8');
       fs.writeFileSync(path.join(dir, 'share.md'), comment.shareText || '（这轮没写 @ 文案）', 'utf8');
       fs.writeFileSync(path.join(dir, 'diary-public.md'), diary.diary.public, 'utf8');
